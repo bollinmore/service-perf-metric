@@ -14,6 +14,7 @@
 - Q: Which latency metric should the dashboard emphasize for alerting? → A: 95th percentile latency (P95)
 - Q: Which existing data source should provide the latency metrics? → A: Parsed application logs
 - Q: When the dashboard loads, what default time window should it display? → A: Last 7 days
+- Q: User Story 2 is currently blank. Which outcome should it deliver? → A: Let engineers tune P95 thresholds and see impact
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -49,21 +50,22 @@ A feature engineer monitors latency trends for their owned service to detect reg
 
 ---
 
-### User Story 2 - [Brief Title] (Priority: P2)
+### User Story 2 - Tune latency thresholds (Priority: P2)
 
-[Describe this user journey in plain language]
+A feature engineer adjusts the P95 latency threshold for a specific service and immediately sees projected alert behavior changes.
 
-**Why this priority**: [Explain the value and why it has this priority level]
+**Why this priority**: Threshold tuning reduces alert fatigue and ensures paging happens only when meaningful regressions occur.
 
-**Independent Test**: [Describe how this can be tested independently]
+**Independent Test**: Engineer updates a threshold via dashboard controls or API and observes new value reflected within the alert configuration preview without impacting other services.
 
-**Baseline Reference**: [Baseline metric window/value and link to evidence documenting current state]
+**Baseline Reference**: Current threshold value from `observability/config/alert-rules.yaml` and 7-day baseline P95 for the selected service.
 
-**Evidence Deliverables**: [Tests, dashboards, alerts, or logs required to prove the story succeeded]
+**Evidence Deliverables**: Threshold change audit log entry, updated configuration screenshot, alert simulation report demonstrating new behavior.
 
 **Acceptance Scenarios**:
 
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
+1. **Given** an authenticated feature engineer, **When** they adjust the P95 threshold for their service, **Then** the system validates the range (50–1000 ms) and saves the override with an audit note.
+2. **Given** a saved threshold override, **When** the engineer previews the alert simulation, **Then** the dashboard displays projected breach intervals using the new threshold within one refresh.
 
 ---
 
