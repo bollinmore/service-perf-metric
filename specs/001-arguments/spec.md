@@ -18,6 +18,14 @@
 - Q: User Story 3 is still empty. What capability should it add? → A: Export latency data for offline analysis (CSV/API)
 - Q: What should happen if the requested time window has missing or incomplete log data? → A: Display dashboard/export with gaps marked and warn the user
 - Q: Which core capability should Functional Requirement FR-001 capture? → A: Engineers view service-specific P95 latency dashboard
+- Q: Which behavior should Functional Requirement FR-002 describe? → A: Validate and update per-service P95 thresholds
+- Q: Which capability should Functional Requirement FR-003 describe? → A: Provide CSV/API export of latency data
+- Q: Which requirement should FR-004 capture? → A: Provide alert simulation preview based on new thresholds
+- Q: Which responsibility should FR-005 cover? → A: Persist full audit log for threshold changes and exports
+- Q: We still need measurable success criteria. What should SC-001 track? → A: Percentage of services with 7-day P95 visible to owners
+- Q: What should SC-002 measure? → A: Median time to adjust thresholds and see simulation updates
+- Q: What outcome should SC-003 capture? → A: Engineer confidence / satisfaction with latency tooling
+- Q: What business impact should SC-004 measure? → A: Reduction in support tickets about latency discrepancies
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -137,10 +145,10 @@ A feature engineer exports latency metrics for their service to share with analy
 ### Functional Requirements
 
 - **FR-001**: System MUST render a per-service dashboard view showing 7-day P95 latency, request counts, and breach highlights for authenticated engineers.
-- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]  
-- **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
-- **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
-- **FR-005**: System MUST [behavior, e.g., "log all security events"]
+- **FR-002**: System MUST allow engineers to submit P95 threshold overrides per service/environment and validate values fall between 50 and 1000 ms before persisting.
+- **FR-003**: Users MUST be able to export latency data for owned services via CSV download or authenticated API call within configurable time windows.
+- **FR-004**: System MUST provide an alert simulation preview that visualizes projected breach intervals using the pending threshold before engineers confirm changes.
+- **FR-005**: System MUST persist an auditable log covering threshold updates and data exports, recording actor, timestamp, values changed, and justification notes.
 
 *Example of marking unclear requirements:*
 
@@ -161,7 +169,7 @@ A feature engineer exports latency metrics for their service to share with analy
 
 ### Measurable Outcomes
 
-- **SC-001**: [Measurable metric, e.g., "Users can complete account creation in under 2 minutes"]
-- **SC-002**: [Measurable metric, e.g., "System handles 1000 concurrent users without degradation"]
-- **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
-- **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
+- **SC-001**: 95% of production services display 7-day P95 latency and request counts to their owning engineers within 5 seconds of dashboard load.
+- **SC-002**: Median time for engineers to submit a threshold change and view the updated simulation preview is under 30 seconds.
+- **SC-003**: 85% of surveyed feature engineers report improved confidence in latency monitoring and threshold management after adoption.
+- **SC-004**: Reduce latency-related support tickets raised to observability/data teams by 40% within one quarter of launch.
