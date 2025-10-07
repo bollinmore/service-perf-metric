@@ -15,6 +15,9 @@
 - Q: Which existing data source should provide the latency metrics? → A: Parsed application logs
 - Q: When the dashboard loads, what default time window should it display? → A: Last 7 days
 - Q: User Story 2 is currently blank. Which outcome should it deliver? → A: Let engineers tune P95 thresholds and see impact
+- Q: User Story 3 is still empty. What capability should it add? → A: Export latency data for offline analysis (CSV/API)
+- Q: What should happen if the requested time window has missing or incomplete log data? → A: Display dashboard/export with gaps marked and warn the user
+- Q: Which core capability should Functional Requirement FR-001 capture? → A: Engineers view service-specific P95 latency dashboard
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -69,21 +72,22 @@ A feature engineer adjusts the P95 latency threshold for a specific service and 
 
 ---
 
-### User Story 3 - [Brief Title] (Priority: P3)
+### User Story 3 - Export latency data (Priority: P3)
 
-[Describe this user journey in plain language]
+A feature engineer exports latency metrics for their service to share with analysts or run offline investigations.
 
-**Why this priority**: [Explain the value and why it has this priority level]
+**Why this priority**: Data export supports deeper analysis without granting full dashboard access and enables long-term archival for compliance.
 
-**Independent Test**: [Describe how this can be tested independently]
+**Independent Test**: Engineer requests an export for a service and receives a downloadable CSV or API response containing the requested window without timing out.
 
-**Baseline Reference**: [Baseline metric window/value and link to evidence documenting current state]
+**Baseline Reference**: Generated dataset should match dashboard P95 latency for the selected window and include associated request counts.
 
-**Evidence Deliverables**: [Tests, dashboards, alerts, or logs required to prove the story succeeded]
+**Evidence Deliverables**: Export job log entry, sample CSV/API payload attached to tasks.md, validation that export respects access controls.
 
 **Acceptance Scenarios**:
 
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
+1. **Given** an authenticated feature engineer, **When** they request a CSV export for their service, **Then** the system queues the job and delivers a download link within 5 minutes.
+2. **Given** an authenticated feature engineer with API access, **When** they call the export endpoint with a time window, **Then** the response returns P95 latency, request counts, and source log versions consistent with the dashboard data.
 
 ---
 
@@ -96,8 +100,8 @@ A feature engineer adjusts the P95 latency threshold for a specific service and 
   Fill them out with the right edge cases.
 -->
 
-- What happens when [boundary condition]?
-- How does system handle [error scenario]?
+- Missing data window: When log ingestion gaps exist, dashboard panels and exports MUST render with explicit gaps and banner warning; do not substitute synthetic values.
+- Access violation: If engineer requests data for services outside their ownership, system MUST deny with audit log entry.
 
 ## Metric Lineage & Evidence *(mandatory)*
 
@@ -132,7 +136,7 @@ A feature engineer adjusts the P95 latency threshold for a specific service and 
 
 ### Functional Requirements
 
-- **FR-001**: System MUST [specific capability, e.g., "allow users to create accounts"]
+- **FR-001**: System MUST render a per-service dashboard view showing 7-day P95 latency, request counts, and breach highlights for authenticated engineers.
 - **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]  
 - **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
 - **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
