@@ -1,0 +1,197 @@
+openapi: 3.1.0
+info:
+  title: Service Latency Dashboard API
+  version: 0.1.0
+  description: Endpoints backing the Service Latency Dashboard for feature engineers.
+servers:
+  - url: https://observability.internal.example.com
+paths:
+  /api/services/owned:
+    get:
+      summary: List services accessible to the authenticated engineer
+      operationId: listOwnedServices
+      responses:
+        '200':
+          description: Accessible services returned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ServiceSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/services/{serviceId}/latency:
+    get:
+      summary: Fetch P95 latency timeline for a service
+      operationId: getServiceLatency
+      parameters:
+        - in: path
+          name: serviceId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: window
+          required: false
+          schema:
+            type: string
+            enum: [15m,1h,24h,7d]
+          description: Overrides default 7-day window.
+      responses:
+        '200':
+          description: Latency series for requested window
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [serviceId, window, points]
+                properties:
+                  serviceId:
+                    type: string
+                  window:
+                    type: string
+                  baselineP95Ms:
+                    type: number
+                    format: float
+                    description: Rolling 7-day baseline used for comparison.
+                  points:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LatencyPoint'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/services/{serviceId}/alert-threshold:
+    get:
+      summary: Retrieve current P95 alert threshold for a service/environment pair
+      operationId: getAlertThreshold
+      parameters:
+        - in: path
+          name: serviceId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: environment
+          required: true
+          schema:
+            type: string
+            enum: [prod, staging]
+      responses:
+        '200':
+          description: Threshold data returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertThreshold'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      summary: Update P95 alert threshold for a service/environment
+      operationId: updateAlertThreshold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p95ThresholdMs, notes]
+              properties:
+                p95ThresholdMs:
+                  type: integer
+                  minimum: 50
+                  maximum: 1000
+                notes:
+                  type: string
+                  maxLength: 256
+      responses:
+        '204':
+          description: Threshold updated
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  schemas:
+    ServiceSummary:
+      type: object
+      required: [serviceId, name, teamOwner]
+      properties:
+        serviceId:
+          type: string
+        name:
+          type: string
+        teamOwner:
+          type: string
+        defaultP95ThresholdMs:
+          type: integer
+          description: Default threshold applied when no override exists.
+    LatencyPoint:
+      type: object
+      required: [timestamp, p95LatencyMs, requestCount]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        p95LatencyMs:
+          type: number
+          format: float
+        requestCount:
+          type: integer
+        sourceLogVersion:
+          type: string
+          description: Schema version for lineage tracking.
+    AlertThreshold:
+      type: object
+      required: [serviceId, environment, p95ThresholdMs, effectiveFrom]
+      properties:
+        serviceId:
+          type: string
+        environment:
+          type: string
+          enum: [prod, staging]
+        p95ThresholdMs:
+          type: integer
+        effectiveFrom:
+          type: string
+          format: date-time
+        notes:
+          type: string
+          nullable: true
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BadRequest:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
