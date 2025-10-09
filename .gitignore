@@ -1,11 +1,2 @@
-# Ignore generated summaries
-InQuire_2.0.1.0/PerformanceLog/summary.csv
-InQuire_2.0.1.2/PerformanceLog/summary.csv
-InQuire_2.0.1.3/PerformanceLog/summary.csv
-result/summary.csv
-
-
-# Ignore new result outputs per version
-result/InQuire_2.0.1.0/summary.csv
-result/InQuire_2.0.1.2/summary.csv
-result/InQuire_2.0.1.3/summary.csv
+data/
+result/

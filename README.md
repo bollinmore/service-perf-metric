@@ -10,9 +10,10 @@ Browse performance CSV outputs in a browser and generate summary reports.
   - `python src/extract.py`
   - `python src/extract.py --combine`
   - `python src/report.py`
-- Run the web app to browse CSVs:
+- Run the web app to browse CSVs and dashboards:
   - `python src/webapp.py`
-  - Open `http://localhost:8000/`
+  - Browse tables: `http://localhost:8000/`
+  - Analytics (pandas table, box plot, line chart): `http://localhost:8000/analytics`
 
 ## Project Layout
 
@@ -31,4 +32,3 @@ On every push, GitHub Actions will:
 - Set up Python and install dependencies.
 - Generate summaries and reports from `data/`.
 - Upload the `result/` directory as a build artifact.
-
