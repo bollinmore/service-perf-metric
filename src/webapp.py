@@ -3,13 +3,13 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.io import to_html
-from flask import Flask, abort, jsonify, render_template_string, request, send_file, url_for
+from flask import Flask, abort, render_template_string, request, send_file, url_for
 
 
 app = Flask(__name__)
@@ -256,8 +256,11 @@ def analytics() -> str:
     version_stats_html = version_stats_df.T.round(2).to_html(classes="table", border=0)
 
     # Prepare tidy data for visualisations
-    box_fig = _build_box_figure(melted, selected_version)
-    box_fig_dict = json.loads(box_fig.to_json()) if box_fig else None
+    box_figures: Dict[str, Dict] = {}
+    for ver in version_cols:
+        fig = _build_box_figure(melted, ver)
+        box_figures[ver] = json.loads(fig.to_json()) if fig else {"data": [], "layout": {}}
+    box_fig_dict = box_figures.get(selected_version)
 
     # Average time per service line chart (all versions)
     service_avg_multi = (
@@ -344,8 +347,15 @@ def analytics() -> str:
             {{ line_plot | safe }}
         </section>
         <script>
-            const boxEndpoint = "{{ url_for('box_data') }}";
-            const initialFig = {{ box_fig_dict | tojson }};
+            const boxFigures = {{ box_figures | tojson }};
+            const initialVersion = "{{ selected_version }}";
+
+            function cloneFigure(fig) {
+                if (!fig) {
+                    return null;
+                }
+                return JSON.parse(JSON.stringify(fig));
+            }
 
             function renderBox(fig) {
                 const boxDiv = document.getElementById("boxPlot");
@@ -356,10 +366,10 @@ def analytics() -> str:
                     return;
                 }
                 message.style.display = "none";
-                Plotly.react(boxDiv, fig.data, fig.layout, {responsive: true});
+                Plotly.newPlot(boxDiv, fig.data, fig.layout, {responsive: true});
             }
 
-            renderBox(initialFig);
+            renderBox(cloneFigure(boxFigures[initialVersion]));
 
             const versionSelect = document.getElementById("version");
             const form = document.querySelector("form.filter");
@@ -376,21 +386,7 @@ def analytics() -> str:
             versionSelect.addEventListener("change", function (ev) {
                 const version = ev.target.value;
                 updateUrl(version);
-                const params = new URLSearchParams({version});
-                fetch(`${boxEndpoint}?${params.toString()}`)
-                    .then((resp) => {
-                        if (!resp.ok) {
-                            throw new Error("Failed to load box plot data");
-                        }
-                        return resp.json();
-                    })
-                    .then((payload) => {
-                        renderBox(payload.figure);
-                    })
-                    .catch((err) => {
-                        console.error(err);
-                        renderBox(null);
-                    });
+                renderBox(cloneFigure(boxFigures[version]));
             });
         </script>
     </body>
@@ -403,30 +399,8 @@ def analytics() -> str:
         line_plot=line_html,
         versions=version_cols,
         selected_version=selected_version,
-        box_fig_dict=box_fig_dict,
+        box_figures=box_figures,
     )
-
-
-@app.route("/analytics/boxdata")
-def box_data():
-    version = request.args.get("version")
-    if not version:
-        abort(400, "Missing version parameter")
-
-    try:
-        df, version_cols, melted, _ = _prepare_summary()
-    except (FileNotFoundError, ValueError) as exc:
-        abort(404, str(exc))
-
-    if version not in version_cols:
-        abort(404, "Version not found")
-
-    fig_box = _build_box_figure(melted, version)
-    if fig_box:
-        figure_payload = json.loads(fig_box.to_json())
-    else:
-        figure_payload = {"data": [], "layout": {}}
-    return jsonify({"figure": figure_payload})
 
 
 if __name__ == "__main__":
