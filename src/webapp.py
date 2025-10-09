@@ -13,6 +13,15 @@ from flask import Flask, abort, render_template_string, request, send_file, url_
 
 app = Flask(__name__)
 
+EXCLUDED_SERVICES = {
+    "EIP2",
+    "EIP 2",
+    "Microsoft 365",
+    "MICROSOFT 365",
+    "OUTLOOK",
+    "Outlook",
+}
+
 # Base directory that holds generated CSV outputs
 RESULT_DIR = Path(__file__).resolve().parent.parent / "result"
 SUMMARY_FILE = RESULT_DIR / "summary.csv"
@@ -190,6 +199,9 @@ def _load_summary() -> Tuple[pd.DataFrame, List[str]]:
     if "service" not in df.columns:
         raise ValueError("summary.csv must contain a 'service' column")
 
+    df["service"] = df["service"].astype(str)
+    df = df[~df["service"].isin(EXCLUDED_SERVICES)]
+
     numeric_cols = [c for c in df.columns if c != "service"]
     if not numeric_cols:
         raise ValueError("summary.csv must contain at least one version column")
@@ -234,6 +246,8 @@ def _load_service_stats() -> Tuple[pd.DataFrame, List[str]]:
 
     versions = sorted(version_set)
     stats_df = stats_df.set_index("service")
+    stats_df.index = stats_df.index.astype(str)
+    stats_df = stats_df[~stats_df.index.isin(EXCLUDED_SERVICES)]
     return stats_df, versions
 
 
@@ -295,9 +309,11 @@ def analytics() -> str:
         abort(404, str(exc))
 
     available_box_versions = [v for v in version_cols if v in stats_versions]
+    dropdown_versions = available_box_versions if available_box_versions else version_cols
+
     selected_version = request.args.get("version")
-    if not selected_version or selected_version not in available_box_versions:
-        selected_version = available_box_versions[0] if available_box_versions else version_cols[0]
+    if not selected_version or selected_version not in dropdown_versions:
+        selected_version = dropdown_versions[0]
 
     # Per-version evolution table using pandas
     version_stats_df = pd.DataFrame({
@@ -311,7 +327,7 @@ def analytics() -> str:
 
     # Prepare tidy data for visualisations
     box_figures: Dict[str, Dict] = {}
-    for ver in version_cols:
+    for ver in dropdown_versions:
         fig = _build_box_from_stats(stats_df, ver, service_order)
         box_figures[ver] = json.loads(fig.to_json()) if fig else {"data": [], "layout": {}}
 
@@ -325,32 +341,62 @@ def analytics() -> str:
         )
         service_avg_multi = service_avg_multi.sort_values("service")
 
-    line_html = "<p>No data available for line chart.</p>"
+    wide = pd.DataFrame()
     if not service_avg_multi.empty:
         wide = service_avg_multi.pivot(index="service", columns="version", values="loading_time")
         if service_order:
             wide = wide.reindex(service_order)
         wide = wide.dropna(how="all")
-        if not wide.empty:
-            fig_line = go.Figure()
-            for version in version_cols:
-                if version in wide.columns and not wide[version].dropna().empty:
-                    fig_line.add_trace(
-                        go.Scatter(
-                            x=wide.index.tolist(),
-                            y=wide[version].tolist(),
-                            mode="lines+markers",
-                            name=version,
-                        )
+
+    line_html = "<p>No data available for line chart.</p>"
+    bar_html = "<p>No data available for bar chart.</p>"
+    if not wide.empty:
+        fig_line = go.Figure()
+        for version in version_cols:
+            if version in wide.columns and not wide[version].dropna().empty:
+                fig_line.add_trace(
+                    go.Scatter(
+                        x=wide.index.tolist(),
+                        y=wide[version].tolist(),
+                        mode="lines+markers",
+                        name=version,
                     )
-            fig_line.update_layout(
-                title="Average Loading Time per Service (by Version)",
-                xaxis_title="Service",
-                yaxis_title="Average Loading Time (ms)",
-                margin=dict(l=30, r=20, t=60, b=80),
-                legend_title="Version",
-            )
-            line_html = to_html(fig_line, include_plotlyjs=False, full_html=False)
+                )
+        fig_line.update_layout(
+            title="Average Loading Time per Service (by Version)",
+            xaxis_title="Service",
+            yaxis_title="Average Loading Time (ms)",
+            margin=dict(l=30, r=20, t=60, b=80),
+            legend_title="Version",
+        )
+        line_html = to_html(fig_line, include_plotlyjs=False, full_html=False)
+
+        fig_bar = go.Figure()
+        for version in version_cols:
+            if version in wide.columns and not wide[version].dropna().empty:
+                values = wide[version].tolist()
+                max_val = max([v for v in values if pd.notna(v)], default=0)
+                fig_bar.add_trace(
+                    go.Bar(
+                        x=wide.index.tolist(),
+                        y=values,
+                        name=version,
+                        text=[f"{v:.0f}" if pd.notna(v) else "" for v in values],
+                        textposition="outside",
+                    )
+                )
+        y_max = wide.max().max()
+        y_buffer = y_max * 0.1 if y_max else 0
+        fig_bar.update_yaxes(range=[0, y_max + y_buffer])
+        fig_bar.update_layout(
+            title="Average Loading Time per Service (Grouped Bar)",
+            xaxis_title="Service",
+            yaxis_title="Average Loading Time (ms)",
+            margin=dict(l=30, r=20, t=60, b=80),
+            barmode="group",
+            legend_title="Version",
+        )
+        bar_html = to_html(fig_bar, include_plotlyjs=False, full_html=False)
 
     template = """
     <!doctype html>
@@ -398,6 +444,10 @@ def analytics() -> str:
         <section class="chart">
             <h2>Average Loading Time per Service</h2>
             {{ line_plot | safe }}
+        </section>
+        <section class="chart">
+            <h2>Average Loading Time per Service (Grouped Bar)</h2>
+            {{ bar_plot | safe }}
         </section>
         <script>
             const boxFigures = {{ box_figures | tojson }};
@@ -450,7 +500,8 @@ def analytics() -> str:
         template,
         version_stats_table=version_stats_html,
         line_plot=line_html,
-        versions=version_cols,
+        bar_plot=bar_html,
+        versions=dropdown_versions,
         selected_version=selected_version,
         box_figures=box_figures,
     )

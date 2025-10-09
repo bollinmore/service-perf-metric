@@ -4,6 +4,15 @@ import csv
 from pathlib import Path
 from typing import Dict, List
 
+EXCLUDED_SERVICES = {
+    "EIP2",
+    "EIP 2",
+    "Microsoft 365",
+    "MICROSOFT 365",
+    "OUTLOOK",
+    "Outlook",
+}
+
 
 def _to_int(s: str) -> int | None:
     try:
@@ -58,7 +67,9 @@ def main() -> int:
         for row in reader:
             if not row:
                 continue
-            service = row[0]
+            service = row[0].strip()
+            if service in EXCLUDED_SERVICES:
+                continue
             if service not in per_service_values:
                 per_service_values[service] = {v: [] for v in versions}
             for i, v in enumerate(versions, start=1):
@@ -107,4 +118,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
