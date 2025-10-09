@@ -350,6 +350,8 @@ def analytics() -> str:
 
     line_html = "<p>No data available for line chart.</p>"
     bar_html = "<p>No data available for bar chart.</p>"
+    line_fig_payload = {}
+    bar_fig_payload = {}
     if not wide.empty:
         fig_line = go.Figure()
         for version in version_cols:
@@ -370,6 +372,7 @@ def analytics() -> str:
             legend_title="Version",
         )
         line_html = to_html(fig_line, include_plotlyjs=False, full_html=False)
+        line_fig_payload = json.loads(fig_line.to_json())
 
         fig_bar = go.Figure()
         for version in version_cols:
@@ -397,6 +400,7 @@ def analytics() -> str:
             legend_title="Version",
         )
         bar_html = to_html(fig_bar, include_plotlyjs=False, full_html=False)
+        bar_fig_payload = json.loads(fig_bar.to_json())
 
     template = """
     <!doctype html>
@@ -405,52 +409,288 @@ def analytics() -> str:
         <meta charset="utf-8" />
         <title>Analytics Dashboard</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 2rem; }
-            h1 { margin-bottom: 0.5rem; }
-            .toolbar { margin-bottom: 1.5rem; }
-            a { text-decoration: none; color: #1a73e8; }
+            :root {
+                color-scheme: light;
+                font-family: Arial, sans-serif;
+            }
+            body {
+                margin: 0;
+                background: #f7f8fa;
+            }
+            a {
+                color: #1a73e8;
+                text-decoration: none;
+            }
             a:hover { text-decoration: underline; }
-            .table { border-collapse: collapse; width: auto; margin-bottom: 2rem; }
-            .table th, .table td { border: 1px solid #ccc; padding: 0.5rem 0.75rem; text-align: right; }
-            .table th:first-child, .table td:first-child { text-align: left; }
-            .chart { margin-bottom: 2.5rem; }
-            form.filter { margin-bottom: 1rem; }
-            select { padding: 0.25rem 0.5rem; }
-            .message { color: #666; }
+
+            header {
+                position: sticky;
+                top: 0;
+                z-index: 10;
+                background: #ffffffd9;
+                backdrop-filter: blur(6px);
+                border-bottom: 1px solid #e0e4ea;
+                padding: 1rem 2rem;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 1rem;
+            }
+            header h1 {
+                margin: 0;
+                font-size: 1.4rem;
+                font-weight: 600;
+            }
+            .controls {
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+                font-size: 0.95rem;
+            }
+            .control-group {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            .control-group label {
+                font-weight: 600;
+                color: #4a4f57;
+            }
+            select {
+                padding: 0.35rem 0.6rem;
+                border-radius: 6px;
+                border: 1px solid #c7ccd6;
+                font-size: 0.95rem;
+                background: #fff;
+            }
+            main {
+                padding: 1.5rem 2rem 2rem;
+            }
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 1.5rem;
+            }
+            .card {
+                background: #fff;
+                border-radius: 12px;
+                padding: 1.25rem;
+                box-shadow: 0 6px 16px -12px rgba(0,0,0,0.35);
+                display: flex;
+                flex-direction: column;
+                min-height: 300px;
+            }
+            .card h2 {
+                margin: 0 0 0.75rem;
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #1f2933;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .card h2 span {
+                font-size: 0.9rem;
+                font-weight: 400;
+                color: #6b7280;
+            }
+            .table {
+                border-collapse: collapse;
+                width: 100%;
+                font-size: 0.9rem;
+            }
+            .table th,
+            .table td {
+                border: 1px solid #e0e4ea;
+                padding: 0.4rem 0.6rem;
+                text-align: right;
+            }
+            .table th:first-child,
+            .table td:first-child {
+                text-align: left;
+            }
+            .table thead {
+                background: #f2f4f8;
+            }
+            .chart-area {
+                flex: 1;
+                min-height: 260px;
+            }
+            #boxPlot {
+                width: 100%;
+                height: 100%;
+                min-height: 260px;
+            }
+            .message {
+                color: #6b7280;
+                font-size: 0.9rem;
+            }
+            .card-actions {
+                display: flex;
+                gap: 0.5rem;
+            }
+            .btn {
+                border-radius: 6px;
+                border: 1px solid #c7ccd6;
+                background: #fff;
+                padding: 0.35rem 0.7rem;
+                font-size: 0.85rem;
+                cursor: pointer;
+                transition: background 0.2s ease, border-color 0.2s ease;
+            }
+           .btn:hover {
+               background: #eef3fb;
+               border-color: #a7b6d0;
+           }
+            .btn.btn-expand {
+                font-size: 0.8rem;
+                padding: 0.25rem 0.5rem;
+            }
+            .btn.btn-close {
+                font-size: 0.85rem;
+                padding: 0.35rem 0.7rem;
+            }
+            .overlay {
+                position: fixed;
+                inset: 0;
+                z-index: 50;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .overlay-backdrop {
+                position: absolute;
+                inset: 0;
+                background: rgba(15, 23, 42, 0.55);
+                backdrop-filter: blur(4px);
+            }
+            .overlay-content {
+                position: relative;
+                background: #fff;
+                border-radius: 12px;
+                width: 96vw;
+                height: 96vh;
+                display: flex;
+                flex-direction: column;
+                box-shadow: 0 25px 60px -20px rgba(15,23,42,0.45);
+            }
+            .overlay-header {
+                padding: 1rem 1.5rem;
+                border-bottom: 1px solid #e0e4ea;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 1rem;
+            }
+            .overlay-header h3 {
+                margin: 0;
+                font-size: 1.1rem;
+            }
+            .overlay-body {
+                padding: 1.5rem;
+                overflow: auto;
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+            }
+            .overlay-body table {
+                width: 100%;
+            }
+            .overlay-body .plot-container {
+                width: 100%;
+                flex: 1 1 auto;
+                min-height: 0;
+                height: 100%;
+            }
+
+            @media (max-width: 1100px) {
+                header {
+                    flex-direction: column;
+                    align-items: flex-start;
+                }
+                .controls {
+                    flex-wrap: wrap;
+                }
+                .grid {
+                    grid-template-columns: 1fr;
+                }
+                .overlay-content {
+                    width: 98vw;
+                    height: 94vh;
+                }
+            }
         </style>
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     </head>
     <body>
-        <div class="toolbar"><a href="{{ url_for('index') }}">&#8592; Back</a></div>
-        <h1>Analytics</h1>
-        <section>
-            <h2>Per-Version Evolution (Pandas)</h2>
-            {{ version_stats_table | safe }}
-        </section>
-        <section class="chart">
-            <h2>Service Distribution (Box Plot)</h2>
-            <form class="filter">
-                <label for="version">Version:
+        <header>
+            <div class="headline">
+                <a href="{{ url_for('index') }}">&#8592; Back</a>
+                <h1>Analytics Dashboard</h1>
+            </div>
+            <div class="controls">
+                <div class="control-group">
+                    <label for="version">Box Plot Version</label>
                     <select id="version" name="version">
                         {% for version in versions %}
                             <option value="{{ version }}" {% if version == selected_version %}selected{% endif %}>{{ version }}</option>
                         {% endfor %}
                     </select>
-                </label>
-            </form>
-            <div id="boxPlot"></div>
-            <p id="boxMessage" class="message" style="display:none;">No data available for selected version.</p>
-        </section>
-        <section class="chart">
-            <h2>Average Loading Time per Service</h2>
-            {{ line_plot | safe }}
-        </section>
-        <section class="chart">
-            <h2>Average Loading Time per Service (Grouped Bar)</h2>
-            {{ bar_plot | safe }}
-        </section>
+                </div>
+            </div>
+        </header>
+        <main>
+            <div class="grid">
+                <section class="card" data-card="table">
+                    <h2>Per-Version Evolution <span>(Aggregates)</span>
+                        <button class="btn btn-expand" data-target="table">Expand</button>
+                    </h2>
+                    <div class="chart-area">
+                        {{ version_stats_table | safe }}
+                    </div>
+                </section>
+                <section class="card" data-card="box">
+                    <h2>Service Distribution <span>(Box Plot)</span>
+                        <button class="btn btn-expand" data-target="box">Expand</button>
+                    </h2>
+                    <div class="chart-area">
+                        <div id="boxPlot"></div>
+                        <p id="boxMessage" class="message" style="display:none;">No data available for selected version.</p>
+                    </div>
+                </section>
+                <section class="card" data-card="line">
+                    <h2>Average Loading Time Trend <span>(Line)</span>
+                        <button class="btn btn-expand" data-target="line">Expand</button>
+                    </h2>
+                    <div class="chart-area">
+                        {{ line_plot | safe }}
+                    </div>
+                </section>
+                <section class="card" data-card="bar">
+                    <h2>Average Loading Time <span>(Grouped Bar)</span>
+                        <button class="btn btn-expand" data-target="bar">Expand</button>
+                    </h2>
+                    <div class="chart-area">
+                        {{ bar_plot | safe }}
+                    </div>
+                </section>
+            </div>
+        </main>
+        <div class="overlay" id="overlay" style="display:none;">
+            <div class="overlay-backdrop"></div>
+            <div class="overlay-content">
+                <div class="overlay-header">
+                    <h3 id="overlayTitle"></h3>
+                    <button class="btn btn-close" id="overlayClose">Close</button>
+                </div>
+                <div class="overlay-body" id="overlayBody"></div>
+            </div>
+        </div>
         <script>
             const boxFigures = {{ box_figures | tojson }};
+            const lineFigure = {{ line_fig | tojson }};
+            const barFigure = {{ bar_fig | tojson }};
+            const versionStatsHTML = {{ version_stats_table | tojson }};
             const initialVersion = "{{ selected_version }}";
 
             function cloneFigure(fig) {
@@ -458,6 +698,27 @@ def analytics() -> str:
                     return null;
                 }
                 return JSON.parse(JSON.stringify(fig));
+            }
+
+            function applyLayoutTweaks(fig) {
+                if (!fig || !fig.layout) {
+                    return fig;
+                }
+                const layout = Object.assign({}, fig.layout);
+                layout.autosize = true;
+                layout.margin = Object.assign({l: 40, r: 20, t: 55, b: 50}, layout.margin || {});
+                return Object.assign({}, fig, { layout });
+            }
+
+            function renderResponsivePlot(container, fig) {
+                if (!fig || !fig.data || fig.data.length === 0) {
+                    Plotly.purge(container);
+                    return false;
+                }
+                const plotFig = applyLayoutTweaks(cloneFigure(fig));
+                Plotly.newPlot(container, plotFig.data, plotFig.layout, {responsive: true, displaylogo: false});
+                setTimeout(() => Plotly.Plots.resize(container), 0);
+                return true;
             }
 
             function renderBox(fig) {
@@ -469,28 +730,74 @@ def analytics() -> str:
                     return;
                 }
                 message.style.display = "none";
-                Plotly.newPlot(boxDiv, fig.data, fig.layout, {responsive: true});
+                renderResponsivePlot(boxDiv, fig);
             }
 
             renderBox(cloneFigure(boxFigures[initialVersion]));
 
             const versionSelect = document.getElementById("version");
-            const form = document.querySelector("form.filter");
-            if (form) {
-                form.addEventListener("submit", function (ev) { ev.preventDefault(); });
-            }
-
-            function updateUrl(version) {
+            versionSelect.addEventListener("change", function (ev) {
+                const version = ev.target.value;
                 const url = new URL(window.location.href);
                 url.searchParams.set("version", version);
                 window.history.replaceState(null, "", url);
-            }
-
-            versionSelect.addEventListener("change", function (ev) {
-                const version = ev.target.value;
-                updateUrl(version);
                 renderBox(cloneFigure(boxFigures[version]));
             });
+
+            const overlay = document.getElementById("overlay");
+            const overlayBody = document.getElementById("overlayBody");
+            const overlayTitle = document.getElementById("overlayTitle");
+            const overlayClose = document.getElementById("overlayClose");
+
+            function openOverlay(target) {
+                overlayBody.innerHTML = "";
+                if (target === "table") {
+                    overlayTitle.textContent = "Per-Version Evolution (Aggregates)";
+                    const tableWrapper = document.createElement("div");
+                    tableWrapper.innerHTML = versionStatsHTML;
+                    overlayBody.appendChild(tableWrapper);
+                } else if (target === "box") {
+                    overlayTitle.textContent = "Service Distribution (Box Plot)";
+                    const boxContainer = document.createElement("div");
+                    boxContainer.className = "plot-container";
+                    overlayBody.appendChild(boxContainer);
+                    const currentVersion = document.getElementById("version").value;
+                    const fig = cloneFigure(boxFigures[currentVersion]);
+                    renderResponsivePlot(boxContainer, fig);
+                } else if (target === "line") {
+                    overlayTitle.textContent = "Average Loading Time Trend (Line)";
+                    const lineContainer = document.createElement("div");
+                    lineContainer.className = "plot-container";
+                    overlayBody.appendChild(lineContainer);
+                    if (lineFigure && lineFigure.data) {
+                        renderResponsivePlot(lineContainer, lineFigure);
+                    }
+                } else if (target === "bar") {
+                    overlayTitle.textContent = "Average Loading Time (Grouped Bar)";
+                    const barContainer = document.createElement("div");
+                    barContainer.className = "plot-container";
+                    overlayBody.appendChild(barContainer);
+                    if (barFigure && barFigure.data) {
+                        renderResponsivePlot(barContainer, barFigure);
+                    }
+                }
+                overlay.style.display = "flex";
+            }
+
+            function closeOverlay() {
+                overlay.style.display = "none";
+                overlayBody.innerHTML = "";
+            }
+
+            document.querySelectorAll(".btn-expand").forEach((btn) => {
+                btn.addEventListener("click", (ev) => {
+                    const target = ev.currentTarget.getAttribute("data-target");
+                    openOverlay(target);
+                });
+            });
+
+            overlayClose.addEventListener("click", closeOverlay);
+            overlay.querySelector(".overlay-backdrop").addEventListener("click", closeOverlay);
         </script>
     </body>
     </html>
@@ -501,6 +808,8 @@ def analytics() -> str:
         version_stats_table=version_stats_html,
         line_plot=line_html,
         bar_plot=bar_html,
+        line_fig=line_fig_payload,
+        bar_fig=bar_fig_payload,
         versions=dropdown_versions,
         selected_version=selected_version,
         box_figures=box_figures,
