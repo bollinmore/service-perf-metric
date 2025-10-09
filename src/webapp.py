@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from plotly.io import to_html
 from flask import Flask, abort, render_template_string, request, send_file, url_for
@@ -216,34 +215,89 @@ def _prepare_summary() -> Tuple[pd.DataFrame, List[str], pd.DataFrame, List[str]
     return df, version_cols, melted, service_order
 
 
-def _build_box_figure(melted: pd.DataFrame, version: str):
-    box_data = melted[melted["version"] == version]
-    if box_data.empty:
+def _load_service_stats() -> Tuple[pd.DataFrame, List[str]]:
+    stats_path = RESULT_DIR / "service_stats.csv"
+    if not stats_path.exists():
+        raise FileNotFoundError("service_stats.csv not found. Generate it with report.py")
+
+    stats_df = pd.read_csv(stats_path)
+    if "service" not in stats_df.columns:
+        raise ValueError("service_stats.csv must contain a 'service' column")
+
+    version_set = set()
+    for col in stats_df.columns:
+        if col == "service" or "_" not in col:
+            continue
+        version, metric = col.rsplit("_", 1)
+        if metric in {"avg", "min", "max", "median"}:
+            version_set.add(version)
+
+    versions = sorted(version_set)
+    stats_df = stats_df.set_index("service")
+    return stats_df, versions
+
+
+def _build_box_from_stats(
+    stats_df: pd.DataFrame,
+    version: str,
+    service_order: List[str],
+) -> go.Figure | None:
+    required_cols = [f"{version}_" + metric for metric in ("min", "median", "avg", "max")]
+    if not all(col in stats_df.columns for col in required_cols):
         return None
 
-    fig_box = px.box(
-        box_data,
-        x="service",
-        y="loading_time",
-        points="all",
-        labels={"service": "Service", "loading_time": "Loading Time (ms)"},
+    fig = go.Figure()
+    targets = service_order if service_order else stats_df.index.tolist()
+    for service in targets:
+        if service not in stats_df.index:
+            continue
+        row = stats_df.loc[service]
+        values = [row.get(col) for col in required_cols]
+        cleaned = [float(v) for v in values if pd.notna(v)]
+        if not cleaned:
+            continue
+        hover_text = (
+            f"Service: {service}<br>Min: {row.get(required_cols[0])}"
+            f"<br>Median: {row.get(required_cols[1])}"
+            f"<br>Average: {row.get(required_cols[2])}"
+            f"<br>Max: {row.get(required_cols[3])}"
+        )
+        fig.add_trace(
+            go.Box(
+                y=cleaned,
+                name=service,
+                boxpoints=False,
+                boxmean=True,
+                hovertext=[hover_text for _ in cleaned],
+                hoverinfo="text",
+            )
+        )
+
+    if not fig.data:
+        return None
+
+    fig.update_layout(
         title=f"Service Loading Time Distribution ({version})",
+        yaxis_title="Loading Time (ms)",
+        xaxis_title="Service",
+        margin=dict(l=30, r=20, t=60, b=80),
+        showlegend=False,
     )
-    fig_box.update_traces(boxmean=True)
-    fig_box.update_layout(margin=dict(l=30, r=20, t=60, b=80))
-    return fig_box
+    return fig
 
 
 @app.route("/analytics")
 def analytics() -> str:
     try:
         df, version_cols, melted, service_order = _prepare_summary()
+        stats_df, stats_versions = _load_service_stats()
     except (FileNotFoundError, ValueError) as exc:
         abort(404, str(exc))
 
+    available_box_versions = [v for v in version_cols if v in stats_versions]
     selected_version = request.args.get("version")
-    if not selected_version or selected_version not in version_cols:
-        selected_version = version_cols[0]
+    if not selected_version or selected_version not in available_box_versions:
+        selected_version = available_box_versions[0] if available_box_versions else version_cols[0]
 
     # Per-version evolution table using pandas
     version_stats_df = pd.DataFrame({
@@ -258,9 +312,8 @@ def analytics() -> str:
     # Prepare tidy data for visualisations
     box_figures: Dict[str, Dict] = {}
     for ver in version_cols:
-        fig = _build_box_figure(melted, ver)
+        fig = _build_box_from_stats(stats_df, ver, service_order)
         box_figures[ver] = json.loads(fig.to_json()) if fig else {"data": [], "layout": {}}
-    box_fig_dict = box_figures.get(selected_version)
 
     # Average time per service line chart (all versions)
     service_avg_multi = (
