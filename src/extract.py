@@ -29,7 +29,7 @@ def parse_log_lines(lines: Iterable[str]) -> List[Tuple[str, int]]:
     return entries
 
 
-def process_dir(dir_path: Path, file_glob: str) -> int:
+def process_dir(dir_path: Path, file_glob: str, out_path: Path | None = None) -> int:
     """Process a PerformanceLog directory and write summary.csv.
 
     Returns the number of rows written (excluding header).
@@ -52,7 +52,8 @@ def process_dir(dir_path: Path, file_glob: str) -> int:
     if not all_entries:
         return 0
 
-    out_path = dir_path / "summary.csv"
+    out_path = out_path or (dir_path / "summary.csv")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["service", "loading_time_ms"])
@@ -77,7 +78,7 @@ def main() -> int:
     parser.add_argument(
         "--combine",
         action="store_true",
-        help="Combine the three generated summaries into result/summary,csv with version headers",
+        help="Combine the three generated summaries into result/summary.csv with version headers",
     )
     args = parser.parse_args()
 
@@ -85,9 +86,9 @@ def main() -> int:
         # Combine existing summary.csv files into result/summary.csv
         versions = ["2.0.1.0", "2.0.1.2", "2.0.1.3"]
         version_map = {
-            "2.0.1.0": Path("InQuire_2.0.1.0") / "PerformanceLog" / "summary.csv",
-            "2.0.1.2": Path("InQuire_2.0.1.2") / "PerformanceLog" / "summary.csv",
-            "2.0.1.3": Path("InQuire_2.0.1.3") / "PerformanceLog" / "summary.csv",
+            "2.0.1.0": Path("result") / "InQuire_2.0.1.0" / "summary.csv",
+            "2.0.1.2": Path("result") / "InQuire_2.0.1.2" / "summary.csv",
+            "2.0.1.3": Path("result") / "InQuire_2.0.1.3" / "summary.csv",
         }
 
         # Load summaries and keep all raw records per service for each version
@@ -149,27 +150,35 @@ def main() -> int:
         return 0
 
     if args.single_dir:
-        rows = process_dir(args.single_dir, args.pattern)
+        # If single_dir is under data/InQuire_*/PerformanceLog, write to result/InQuire_*/summary.csv
+        out_path = None
+        try:
+            if args.single_dir.parent.name.startswith("InQuire_") and args.single_dir.parent.parent.name == "data":
+                out_path = Path("result") / args.single_dir.parent.name / "summary.csv"
+        except Exception:
+            out_path = None
+        rows = process_dir(args.single_dir, args.pattern, out_path=out_path)
         if rows <= 0:
             print(f"No matching entries found in {args.single_dir} (pattern {args.pattern})")
         else:
-            print(f"Wrote {rows} data rows to {args.single_dir / 'summary.csv'}")
+            target = out_path if out_path else (args.single_dir / 'summary.csv')
+            print(f"Wrote {rows} data rows to {target}")
         return 0
 
     # Default: process known folders based on earlier requirements
     configs = [
-        (Path("InQuire_2.0.1.0") / "PerformanceLog", "*.log"),
-        (Path("InQuire_2.0.1.2") / "PerformanceLog", "*.log"),
-        (Path("InQuire_2.0.1.3") / "PerformanceLog", "*loading.log"),  # ignore *login.log
+        (Path("data") / "InQuire_2.0.1.0" / "PerformanceLog", "*.log", Path("result") / "InQuire_2.0.1.0" / "summary.csv"),
+        (Path("data") / "InQuire_2.0.1.2" / "PerformanceLog", "*.log", Path("result") / "InQuire_2.0.1.2" / "summary.csv"),
+        (Path("data") / "InQuire_2.0.1.3" / "PerformanceLog", "*loading.log", Path("result") / "InQuire_2.0.1.3" / "summary.csv"),  # ignore *login.log
     ]
 
     total_written = 0
-    for d, pattern in configs:
+    for d, pattern, outp in configs:
         if not d.exists():
             continue
-        rows = process_dir(d, pattern)
+        rows = process_dir(d, pattern, out_path=outp)
         if rows > 0:
-            print(f"Wrote {rows} data rows to {d / 'summary.csv'}")
+            print(f"Wrote {rows} data rows to {outp}")
             total_written += rows
         else:
             print(f"No matching entries found in {d} (pattern {pattern})")
