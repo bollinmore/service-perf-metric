@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Generate summaries
+        run: |
+          python src/extract.py || true
+          python src/extract.py --combine || true
+          python src/report.py || true
+
+      - name: Sanity check web app
+        run: python -m py_compile src/webapp.py
+
+      - name: Upload result artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: result
+          path: result/
+          if-no-files-found: warn
+
