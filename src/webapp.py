@@ -270,20 +270,35 @@ def _build_box_from_stats(
         cleaned = [float(v) for v in values if pd.notna(v)]
         if not cleaned:
             continue
-        hover_text = (
-            f"Service: {service}<br>Min: {row.get(required_cols[0])}"
-            f"<br>Median: {row.get(required_cols[1])}"
-            f"<br>Average: {row.get(required_cols[2])}"
-            f"<br>Max: {row.get(required_cols[3])}"
+        stats_tuple = (
+            row.get(required_cols[0]),
+            row.get(required_cols[1]),
+            row.get(required_cols[2]),
+            row.get(required_cols[3]),
         )
+        customdata = [
+            [
+                stats_tuple[0],
+                stats_tuple[1],
+                stats_tuple[2],
+                stats_tuple[3],
+            ]
+        ] * len(cleaned)
         fig.add_trace(
             go.Box(
                 y=cleaned,
                 name=service,
                 boxpoints=False,
                 boxmean=True,
-                hovertext=[hover_text for _ in cleaned],
-                hoverinfo="text",
+                customdata=customdata,
+                hovertemplate=(
+                    "Service: %{x}<br>"
+                    "Min: %{customdata[0]:.0f} ms<br>"
+                    "Median: %{customdata[1]:.0f} ms<br>"
+                    "Average: %{customdata[2]:.0f} ms<br>"
+                    "Max: %{customdata[3]:.0f} ms"
+                    "<extra></extra>"
+                ),
             )
         )
 
@@ -602,6 +617,23 @@ def analytics() -> str:
                 min-height: 0;
                 height: 100%;
             }
+            .overlay-controls {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                margin-bottom: 1rem;
+            }
+            .overlay-controls label {
+                font-weight: 600;
+                color: #4a4f57;
+            }
+            .overlay-controls select {
+                padding: 0.35rem 0.6rem;
+                border-radius: 6px;
+                border: 1px solid #c7ccd6;
+                font-size: 0.95rem;
+                background: #fff;
+            }
 
             @media (max-width: 1100px) {
                 header {
@@ -628,16 +660,7 @@ def analytics() -> str:
                 <a href="{{ url_for('index') }}">&#8592; Back</a>
                 <h1>Analytics Dashboard</h1>
             </div>
-            <div class="controls">
-                <div class="control-group">
-                    <label for="version">Box Plot Version</label>
-                    <select id="version" name="version">
-                        {% for version in versions %}
-                            <option value="{{ version }}" {% if version == selected_version %}selected{% endif %}>{{ version }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-            </div>
+            <div class="controls"></div>
         </header>
         <main>
             <div class="grid">
@@ -650,8 +673,17 @@ def analytics() -> str:
                     </div>
                 </section>
                 <section class="card" data-card="box">
-                    <h2>Service Distribution <span>(Box Plot)</span>
-                        <button class="btn btn-expand" data-target="box">Expand</button>
+                    <h2>
+                        <span>Service Distribution <span>(Box Plot)</span></span>
+                        <span class="card-actions">
+                            <label for="version" style="font-weight:600;color:#4a4f57;margin-right:0.5rem;">Version</label>
+                            <select id="version" name="version" style="margin-right:0.75rem;">
+                                {% for version in versions %}
+                                    <option value="{{ version }}" {% if version == selected_version %}selected{% endif %}>{{ version }}</option>
+                                {% endfor %}
+                            </select>
+                            <button class="btn btn-expand" data-target="box">Expand</button>
+                        </span>
                     </h2>
                     <div class="chart-area">
                         <div id="boxPlot"></div>
@@ -688,6 +720,7 @@ def analytics() -> str:
         </div>
         <script>
             const boxFigures = {{ box_figures | tojson }};
+            const versionsList = {{ versions | tojson }};
             const lineFigure = {{ line_fig | tojson }};
             const barFigure = {{ bar_fig | tojson }};
             const versionStatsHTML = {{ version_stats_table | tojson }};
@@ -736,12 +769,21 @@ def analytics() -> str:
             renderBox(cloneFigure(boxFigures[initialVersion]));
 
             const versionSelect = document.getElementById("version");
+            let overlayVersionSelect = null;
+            let overlayBoxContainer = null;
+
             versionSelect.addEventListener("change", function (ev) {
                 const version = ev.target.value;
                 const url = new URL(window.location.href);
                 url.searchParams.set("version", version);
                 window.history.replaceState(null, "", url);
                 renderBox(cloneFigure(boxFigures[version]));
+                if (overlayVersionSelect) {
+                    overlayVersionSelect.value = version;
+                }
+                if (overlayBoxContainer) {
+                    renderResponsivePlot(overlayBoxContainer, boxFigures[version]);
+                }
             });
 
             const overlay = document.getElementById("overlay");
@@ -751,6 +793,8 @@ def analytics() -> str:
 
             function openOverlay(target) {
                 overlayBody.innerHTML = "";
+                overlayVersionSelect = null;
+                overlayBoxContainer = null;
                 if (target === "table") {
                     overlayTitle.textContent = "Per-Version Evolution (Aggregates)";
                     const tableWrapper = document.createElement("div");
@@ -758,12 +802,47 @@ def analytics() -> str:
                     overlayBody.appendChild(tableWrapper);
                 } else if (target === "box") {
                     overlayTitle.textContent = "Service Distribution (Box Plot)";
+                    const controls = document.createElement("div");
+                    controls.className = "overlay-controls";
+                    const overlayLabel = document.createElement("label");
+                    overlayLabel.setAttribute("for", "overlay-version");
+                    overlayLabel.textContent = "Version";
+                    const overlaySelect = document.createElement("select");
+                    overlaySelect.id = "overlay-version";
+                    versionsList.forEach((ver) => {
+                        const opt = document.createElement("option");
+                        opt.value = ver;
+                        opt.textContent = ver;
+                        overlaySelect.appendChild(opt);
+                    });
+                    const mainSelect = document.getElementById("version");
+                    if (mainSelect) {
+                        overlaySelect.value = mainSelect.value;
+                    }
+                    controls.appendChild(overlayLabel);
+                    controls.appendChild(overlaySelect);
+                    overlayBody.appendChild(controls);
+
                     const boxContainer = document.createElement("div");
                     boxContainer.className = "plot-container";
                     overlayBody.appendChild(boxContainer);
                     const currentVersion = document.getElementById("version").value;
                     const fig = cloneFigure(boxFigures[currentVersion]);
                     renderResponsivePlot(boxContainer, fig);
+
+                    overlayVersionSelect = overlaySelect;
+                    overlayBoxContainer = boxContainer;
+
+                    overlaySelect.addEventListener("change", (ev) => {
+                        const chosen = ev.target.value;
+                        if (mainSelect && mainSelect.value !== chosen) {
+                            mainSelect.value = chosen;
+                            mainSelect.dispatchEvent(new Event("change"));
+                        } else {
+                            renderBox(cloneFigure(boxFigures[chosen]));
+                            renderResponsivePlot(boxContainer, boxFigures[chosen]);
+                        }
+                    });
                 } else if (target === "line") {
                     overlayTitle.textContent = "Average Loading Time Trend (Line)";
                     const lineContainer = document.createElement("div");
@@ -787,6 +866,8 @@ def analytics() -> str:
             function closeOverlay() {
                 overlay.style.display = "none";
                 overlayBody.innerHTML = "";
+                overlayVersionSelect = null;
+                overlayBoxContainer = null;
             }
 
             document.querySelectorAll(".btn-expand").forEach((btn) => {
