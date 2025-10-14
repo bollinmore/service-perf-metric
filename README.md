@@ -4,20 +4,24 @@ Browse performance CSV outputs in a browser and generate summary reports.
 
 ## Quick Start
 
-- Install dependencies:
-  - `pip install -r requirements.txt`
-- Generate per-version summaries and combined report:
-  - `python src/extract.py`
-  - `python src/extract.py --combine`
-  - `python src/report.py`
-- Run the web app to browse CSVs and dashboards:
-  - `python src/webapp.py`
-  - Browse tables: `http://localhost:8000/`
-  - Analytics (pandas table, box plot, line chart): `http://localhost:8000/analytics`
+- Install dependencies with `pip install -r requirements.txt`.
+- (Optional) Consolidate multiple raw folders into `data/`:
+  - `python spm.py merge data1 data2 data3 --into data`
+- Generate the per-version summaries and aggregated reports (default `--data data`):
+  - `python spm.py generate`
+  - Use a different source folder with `python spm.py generate --data data2`
+- Start the browser UI (builds reports unless `--no-build` is supplied):
+  - `python spm.py serve`
+  - `python spm.py serve --data data2` (shorthand: `python spm.py serve data2`)
+  - Open tables at `http://localhost:8000/`
+  - Analytics dashboard at `http://localhost:8000/analytics`
+- Clean out generated artifacts anytime:
+  - `python spm.py clean`
 
 ## Project Layout
 
-- `data/InQuire_*/PerformanceLog/` raw logs (inputs)
+- `data/` default root for raw logs (overridable via CLI `--data`; other folders like `data1/`, `data2/` can be merged)
+- `data/<version>/PerformanceLog/` raw logs (source inputs)
 - `result/InQuire_*/summary.csv` per-version summaries
 - `result/summary.csv` combined table across versions
 - `result/summary_stats.csv` overall stats per version
@@ -25,6 +29,7 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - `src/extract.py` log parser + combiner
 - `src/report.py` stats generator
 - `src/webapp.py` Flask CSV browser
+- `spm.py` entry-point CLI (`clean`, `generate`, `serve`, `merge`)
 
 ## CI
 
