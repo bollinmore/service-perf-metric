@@ -9,7 +9,7 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.io import to_html
-from flask import Flask, abort, render_template_string, request, send_file, url_for
+from flask import Flask, abort, jsonify, render_template_string, request, send_file, url_for
 
 
 app = Flask(__name__)
@@ -303,6 +303,45 @@ def _load_service_stats(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
     return stats_df, versions
 
 
+def _build_bar_figure_from_wide(wide: pd.DataFrame, version_cols: List[str]) -> go.Figure:
+    fig = go.Figure()
+    y_max = 0.0
+    x_labels = wide.index.tolist()
+    for version in version_cols:
+        if version not in wide.columns:
+            continue
+        column = wide[version]
+        if column.isna().all():
+            continue
+        values = column.tolist()
+        fig.add_trace(
+            go.Bar(
+                x=x_labels,
+                y=values,
+                name=version,
+                text=[f"{v:.0f}" if pd.notna(v) else "" for v in values],
+                textposition="outside",
+            )
+        )
+        current_max = max([v for v in values if pd.notna(v)] or [0])
+        y_max = max(y_max, current_max)
+
+    if not fig.data:
+        return fig
+
+    y_buffer = y_max * 0.1 if y_max else 0
+    fig.update_yaxes(range=[0, y_max + y_buffer])
+    fig.update_layout(
+        title="Average Loading Time per Service (Grouped Bar)",
+        xaxis_title="Service",
+        yaxis_title="Average Loading Time (ms)",
+        margin=dict(l=30, r=20, t=60, b=80),
+        barmode="group",
+        legend_title="Version",
+    )
+    return fig
+
+
 def _build_box_from_stats(
     stats_df: pd.DataFrame,
     version: str,
@@ -459,31 +498,7 @@ def analytics() -> str:
         line_html = to_html(fig_line, include_plotlyjs=False, full_html=False)
         line_fig_payload = json.loads(fig_line.to_json())
 
-        fig_bar = go.Figure()
-        for version in version_cols:
-            if version in wide.columns and not wide[version].dropna().empty:
-                values = wide[version].tolist()
-                max_val = max([v for v in values if pd.notna(v)], default=0)
-                fig_bar.add_trace(
-                    go.Bar(
-                        x=wide.index.tolist(),
-                        y=values,
-                        name=version,
-                        text=[f"{v:.0f}" if pd.notna(v) else "" for v in values],
-                        textposition="outside",
-                    )
-                )
-        y_max = wide.max().max()
-        y_buffer = y_max * 0.1 if y_max else 0
-        fig_bar.update_yaxes(range=[0, y_max + y_buffer])
-        fig_bar.update_layout(
-            title="Average Loading Time per Service (Grouped Bar)",
-            xaxis_title="Service",
-            yaxis_title="Average Loading Time (ms)",
-            margin=dict(l=30, r=20, t=60, b=80),
-            barmode="group",
-            legend_title="Version",
-        )
+        fig_bar = _build_bar_figure_from_wide(wide, version_cols)
         bar_html = to_html(fig_bar, include_plotlyjs=False, full_html=False)
         bar_fig_payload = json.loads(fig_bar.to_json())
 
@@ -803,11 +818,14 @@ def analytics() -> str:
             const boxFigures = {{ box_figures | tojson }};
             const versionsList = {{ versions | tojson }};
             const lineFigure = {{ line_fig | tojson }};
-            const barFigure = {{ bar_fig | tojson }};
+            let currentBarFigure = {{ bar_fig | tojson }};
             const versionStatsHTML = {{ version_stats_table | tojson }};
             const initialVersion = "{{ selected_version }}";
+            const barDataEndpoint = "{{ bar_data_endpoint }}";
 
             const datasetSelect = document.getElementById("dataset");
+            const initialDataset = "{{ selected_dataset }}";
+            let currentBarDataset = initialDataset || (datasetSelect ? datasetSelect.value : "");
             if (datasetSelect) {
                 datasetSelect.addEventListener("change", function (ev) {
                     const dataset = ev.target.value;
@@ -867,6 +885,7 @@ def analytics() -> str:
             const versionSelect = document.getElementById("version");
             let overlayVersionSelect = null;
             let overlayBoxContainer = null;
+            let overlayDatasetSelect = null;
 
             versionSelect.addEventListener("change", function (ev) {
                 const version = ev.target.value;
@@ -949,11 +968,50 @@ def analytics() -> str:
                     }
                 } else if (target === "bar") {
                     overlayTitle.textContent = "Average Loading Time (Grouped Bar)";
+                    if (datasetSelect) {
+                        const controls = document.createElement("div");
+                        controls.className = "overlay-controls";
+                        const dsLabel = document.createElement("label");
+                        dsLabel.setAttribute("for", "overlay-dataset");
+                        dsLabel.textContent = "Dataset";
+                        const dsSelect = datasetSelect.cloneNode(true);
+                        dsSelect.id = "overlay-dataset";
+                        dsSelect.value = currentBarDataset || (datasetSelect ? datasetSelect.value : dsSelect.value);
+                        controls.appendChild(dsLabel);
+                        controls.appendChild(dsSelect);
+                        overlayBody.appendChild(controls);
+                        overlayDatasetSelect = dsSelect;
+                        dsSelect.addEventListener("change", (ev) => {
+                            const chosen = ev.target.value;
+                            const params = new URLSearchParams();
+                            if (chosen) {
+                                params.set("dataset", chosen);
+                            }
+                            fetch(`${barDataEndpoint}?${params.toString()}`)
+                                .then((resp) => {
+                                    if (!resp.ok) {
+                                        throw new Error("Failed to fetch dataset bar data");
+                                    }
+                                    return resp.json();
+                                })
+                                .then((payload) => {
+                                    if (payload.figure) {
+                                        currentBarFigure = payload.figure;
+                                        currentBarDataset = payload.dataset || chosen || "";
+                                        dsSelect.value = currentBarDataset;
+                                        renderResponsivePlot(barContainer, payload.figure);
+                                    }
+                                })
+                                .catch((err) => {
+                                    console.error(err);
+                                });
+                        });
+                    }
                     const barContainer = document.createElement("div");
                     barContainer.className = "plot-container";
                     overlayBody.appendChild(barContainer);
-                    if (barFigure && barFigure.data) {
-                        renderResponsivePlot(barContainer, barFigure);
+                    if (currentBarFigure && currentBarFigure.data) {
+                        renderResponsivePlot(barContainer, currentBarFigure);
                     }
                 }
                 overlay.style.display = "flex";
@@ -964,6 +1022,7 @@ def analytics() -> str:
                 overlayBody.innerHTML = "";
                 overlayVersionSelect = null;
                 overlayBoxContainer = null;
+                overlayDatasetSelect = null;
             }
 
             document.querySelectorAll(".btn-expand").forEach((btn) => {
@@ -992,7 +1051,49 @@ def analytics() -> str:
         versions=dropdown_versions,
         selected_version=selected_version,
         box_figures=box_figures,
+        bar_data_endpoint=url_for("analytics_bardata"),
     )
+
+
+@app.route("/analytics/bardata")
+def analytics_bardata():
+    dataset_param = request.args.get("dataset")
+    dataset_options = _available_datasets()
+    dataset = dataset_param or DEFAULT_DATASET_NAME
+    if not dataset and dataset_options:
+        dataset = dataset_options[0]
+
+    try:
+        result_dir = _result_dir_for_dataset(dataset)
+        df, version_cols, melted, service_order = _prepare_summary(result_dir)
+    except (ValueError, FileNotFoundError) as exc:
+        abort(404, str(exc))
+
+    service_avg_multi = (
+        melted.groupby(["service", "version"])["loading_time"].mean().reset_index()
+    )
+    if service_order:
+        service_avg_multi["service"] = pd.Categorical(
+            service_avg_multi["service"], categories=service_order, ordered=True
+        )
+        service_avg_multi = service_avg_multi.sort_values("service")
+
+    if service_avg_multi.empty:
+        return jsonify({"figure": {"data": [], "layout": {}}, "dataset": dataset or ""})
+
+    wide = service_avg_multi.pivot(index="service", columns="version", values="loading_time")
+    if service_order:
+        wide = wide.reindex(service_order)
+    wide = wide.dropna(how="all")
+
+    if wide.empty:
+        return jsonify({"figure": {"data": [], "layout": {}}, "dataset": dataset or ""})
+
+    fig_bar = _build_bar_figure_from_wide(wide, version_cols)
+    return jsonify({
+        "figure": json.loads(fig_bar.to_json()),
+        "dataset": dataset or "",
+    })
 
 
 if __name__ == "__main__":
