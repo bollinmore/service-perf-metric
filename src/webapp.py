@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -22,8 +23,16 @@ EXCLUDED_SERVICES = {
     "Outlook",
 }
 
+
+def _resolve_result_dir() -> Path:
+    env_value = os.environ.get("SPM_RESULT_ROOT")
+    if env_value:
+        return Path(env_value)
+    return Path(__file__).resolve().parent.parent / "result"
+
+
 # Base directory that holds generated CSV outputs
-RESULT_DIR = Path(__file__).resolve().parent.parent / "result"
+RESULT_DIR = _resolve_result_dir()
 SUMMARY_FILE = RESULT_DIR / "summary.csv"
 
 

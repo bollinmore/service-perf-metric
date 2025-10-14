@@ -10,6 +10,7 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - Generate the per-version summaries and aggregated reports (default `--data data`):
   - `python spm.py generate`
   - Use a different source folder with `python spm.py generate --data data2`
+  - Outputs are stored under `result/<data-folder>/`; repeated runs reuse existing CSVs
 - Start the browser UI (builds reports unless `--no-build` is supplied):
   - `python spm.py serve`
   - `python spm.py serve --data data2` (shorthand: `python spm.py serve data2`)
@@ -22,10 +23,10 @@ Browse performance CSV outputs in a browser and generate summary reports.
 
 - `data/` default root for raw logs (overridable via CLI `--data`; other folders like `data1/`, `data2/` can be merged)
 - `data/<version>/PerformanceLog/` raw logs (source inputs)
-- `result/InQuire_*/summary.csv` per-version summaries
-- `result/summary.csv` combined table across versions
-- `result/summary_stats.csv` overall stats per version
-- `result/service_stats.csv` per-service stats
+- `result/<data-folder>/InQuire_*/summary.csv` per-version summaries
+- `result/<data-folder>/summary.csv` combined table across versions
+- `result/<data-folder>/summary_stats.csv` overall stats per version
+- `result/<data-folder>/service_stats.csv` per-service stats
 - `src/extract.py` log parser + combiner
 - `src/report.py` stats generator
 - `src/webapp.py` Flask CSV browser

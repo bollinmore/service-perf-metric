@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 from typing import Dict, List
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_RESULT_ROOT = BASE_DIR / "result"
+RESULT_ROOT = (
+    Path(os.environ["SPM_RESULT_ROOT"])
+    if "SPM_RESULT_ROOT" in os.environ
+    else DEFAULT_RESULT_ROOT
+)
 
 EXCLUDED_SERVICES = {
     "EIP2",
@@ -45,7 +55,7 @@ def _median(vals: List[int]) -> int:
 
 
 def main() -> int:
-    src = Path("result") / "summary.csv"
+    src = RESULT_ROOT / "summary.csv"
     if not src.exists():
         print(f"Missing input: {src}")
         return 1
@@ -81,7 +91,7 @@ def main() -> int:
                 per_version_values[v].append(val)
                 per_service_values[service][v].append(val)
 
-    out_dir = Path("result")
+    out_dir = RESULT_ROOT
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Overall per-version stats

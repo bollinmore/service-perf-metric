@@ -14,6 +14,12 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = BASE_DIR / "data"
 DEFAULT_RESULT_DIR = BASE_DIR / "result"
 
+
+def result_root_for_data(data_root: Path) -> Path:
+    """Return the result directory that corresponds to the given data folder."""
+    return DEFAULT_RESULT_DIR / data_root.name
+
+
 # Allow imports from src.*
 sys.path.insert(0, str(BASE_DIR))
 
@@ -131,6 +137,16 @@ def _combine_summaries(summary_map: Dict[str, Path], output_path: Path) -> None:
 
 def generate_reports(data_root: Path, result_root: Path) -> None:
     """Parse logs under data_root and produce CSV summaries in result_root."""
+    result_root.mkdir(parents=True, exist_ok=True)
+
+    summary_marker = result_root / "summary.csv"
+    if summary_marker.exists():
+        print(
+            f"[generate] Existing outputs detected for '{data_root.name}' at {result_root}; "
+            "reusing previous artifacts for charts"
+        )
+        return
+
     datasets = _collect_log_dirs(data_root)
     if not datasets:
         print(f"[generate] No PerformanceLog folders found under {data_root}")
@@ -157,14 +173,18 @@ def generate_reports(data_root: Path, result_root: Path) -> None:
         print("[generate] No summaries generated")
         return
 
-    combined_path = result_root / "summary.csv"
+    combined_path = summary_marker
     _combine_summaries(summary_paths, combined_path)
+
+    env = os.environ.copy()
+    env["SPM_RESULT_ROOT"] = str(result_root)
 
     try:
         subprocess.run(
             [sys.executable, str(BASE_DIR / "src" / "report.py")],
             check=True,
             cwd=BASE_DIR,
+            env=env,
         )
     except subprocess.CalledProcessError as exc:
         print(f"[generate] report.py failed: {exc}")
@@ -227,9 +247,13 @@ def merge_data_folders(
     )
 
 
-def serve_webapp(host: str, port: int, debug: bool) -> None:
+def serve_webapp(host: str, port: int, debug: bool, result_root: Path) -> None:
     """Start the Flask web application."""
+    os.environ["SPM_RESULT_ROOT"] = str(result_root)
     from src import webapp
+
+    webapp.RESULT_DIR = result_root
+    webapp.SUMMARY_FILE = result_root / "summary.csv"
 
     try:
         webapp.app.run(host=host, port=port, debug=debug)
@@ -320,15 +344,17 @@ def cmd_clean(args: argparse.Namespace) -> None:
 
 def cmd_generate(args: argparse.Namespace) -> None:
     data_root = _resolve_path(args.data, DEFAULT_DATA_DIR)
-    generate_reports(data_root, DEFAULT_RESULT_DIR)
+    result_root = result_root_for_data(data_root)
+    generate_reports(data_root, result_root)
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
     data_arg = args.data_dir or args.data
     data_root = _resolve_path(data_arg, DEFAULT_DATA_DIR)
+    result_root = result_root_for_data(data_root)
     if not args.no_build:
-        generate_reports(data_root, DEFAULT_RESULT_DIR)
-    serve_webapp(args.host, args.port, args.debug)
+        generate_reports(data_root, result_root)
+    serve_webapp(args.host, args.port, args.debug, result_root)
 
 
 def cmd_merge(args: argparse.Namespace) -> None:
