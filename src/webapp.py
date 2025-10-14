@@ -31,15 +31,57 @@ def _resolve_result_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "result"
 
 
+def _resolve_result_base_dir() -> Path:
+    env_value = os.environ.get("SPM_RESULT_BASE")
+    if env_value:
+        return Path(env_value)
+    return Path(__file__).resolve().parent.parent / "result"
+
+
 # Base directory that holds generated CSV outputs
+RESULT_BASE_DIR = _resolve_result_base_dir()
 RESULT_DIR = _resolve_result_dir()
+DEFAULT_DATASET_NAME = os.environ.get("SPM_DEFAULT_DATASET")
 SUMMARY_FILE = RESULT_DIR / "summary.csv"
+
+
+def configure_result_dirs(result_dir: Path, base_dir: Path, dataset_name: str | None) -> None:
+    """Update the module-level paths when the CLI provides overrides."""
+    global RESULT_DIR, RESULT_BASE_DIR, SUMMARY_FILE, DEFAULT_DATASET_NAME
+    RESULT_DIR = result_dir
+    RESULT_BASE_DIR = base_dir
+    SUMMARY_FILE = RESULT_DIR / "summary.csv"
+    DEFAULT_DATASET_NAME = dataset_name
 
 
 def _list_csv_files() -> List[Path]:
     if not RESULT_DIR.exists():
         return []
     return sorted(p for p in RESULT_DIR.rglob("*.csv") if p.is_file())
+
+
+def _available_datasets() -> List[str]:
+    if not RESULT_BASE_DIR.exists():
+        return []
+    datasets: List[str] = []
+    for entry in sorted(RESULT_BASE_DIR.iterdir()):
+        if entry.is_dir() and (entry / "summary.csv").exists():
+            datasets.append(entry.name)
+    return datasets
+
+
+def _result_dir_for_dataset(dataset: str | None) -> Path:
+    if not dataset:
+        return RESULT_DIR
+    candidate = (RESULT_BASE_DIR / dataset).resolve()
+    base_resolved = RESULT_BASE_DIR.resolve()
+    if base_resolved != candidate and base_resolved not in candidate.parents:
+        raise ValueError("Invalid dataset selection")
+    if not candidate.exists():
+        raise FileNotFoundError(f"Dataset '{dataset}' not found")
+    if not candidate.is_dir():
+        raise FileNotFoundError(f"Dataset '{dataset}' is not a directory")
+    return candidate
 
 
 def _safe_resolve(rel_path: str) -> Path:
@@ -200,11 +242,12 @@ def download_csv():
     return send_file(target, mimetype="text/csv", as_attachment=True, download_name=target.name)
 
 
-def _load_summary() -> Tuple[pd.DataFrame, List[str]]:
-    if not SUMMARY_FILE.exists():
+def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
+    summary_path = result_dir / "summary.csv"
+    if not summary_path.exists():
         raise FileNotFoundError("summary.csv not found. Generate it with extract.py --combine")
 
-    df = pd.read_csv(SUMMARY_FILE)
+    df = pd.read_csv(summary_path)
     if "service" not in df.columns:
         raise ValueError("summary.csv must contain a 'service' column")
 
@@ -219,8 +262,8 @@ def _load_summary() -> Tuple[pd.DataFrame, List[str]]:
     return df, numeric_cols
 
 
-def _prepare_summary() -> Tuple[pd.DataFrame, List[str], pd.DataFrame, List[str]]:
-    df, version_cols = _load_summary()
+def _prepare_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str], pd.DataFrame, List[str]]:
+    df, version_cols = _load_summary(result_dir)
 
     melted = df.melt(
         id_vars="service",
@@ -236,8 +279,8 @@ def _prepare_summary() -> Tuple[pd.DataFrame, List[str], pd.DataFrame, List[str]
     return df, version_cols, melted, service_order
 
 
-def _load_service_stats() -> Tuple[pd.DataFrame, List[str]]:
-    stats_path = RESULT_DIR / "service_stats.csv"
+def _load_service_stats(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
+    stats_path = result_dir / "service_stats.csv"
     if not stats_path.exists():
         raise FileNotFoundError("service_stats.csv not found. Generate it with report.py")
 
@@ -326,9 +369,27 @@ def _build_box_from_stats(
 
 @app.route("/analytics")
 def analytics() -> str:
+    dataset_param = request.args.get("dataset")
+    dataset_options = _available_datasets()
+    active_dataset = dataset_param or DEFAULT_DATASET_NAME
+    if not active_dataset and dataset_options:
+        active_dataset = dataset_options[0]
+
     try:
-        df, version_cols, melted, service_order = _prepare_summary()
-        stats_df, stats_versions = _load_service_stats()
+        active_result_dir = _result_dir_for_dataset(active_dataset)
+    except ValueError as exc:
+        abort(400, str(exc))
+    except FileNotFoundError as exc:
+        abort(404, str(exc))
+
+    if active_dataset and active_dataset not in dataset_options:
+        dataset_options = sorted(set(dataset_options + [active_dataset]))
+
+    selected_dataset = active_dataset or ""
+
+    try:
+        df, version_cols, melted, service_order = _prepare_summary(active_result_dir)
+        stats_df, stats_versions = _load_service_stats(active_result_dir)
     except (FileNotFoundError, ValueError) as exc:
         abort(404, str(exc))
 
@@ -708,8 +769,19 @@ def analytics() -> str:
                     </div>
                 </section>
                 <section class="card" data-card="bar">
-                    <h2>Average Loading Time <span>(Grouped Bar)</span>
-                        <button class="btn btn-expand" data-target="bar">Expand</button>
+                    <h2>
+                        <span>Average Loading Time <span>(Grouped Bar)</span></span>
+                        <span class="card-actions">
+                            {% if datasets %}
+                            <label for="dataset" style="font-weight:600;color:#4a4f57;margin-right:0.5rem;">Dataset</label>
+                            <select id="dataset" name="dataset" style="margin-right:0.75rem;">
+                                {% for ds in datasets %}
+                                    <option value="{{ ds }}" {% if ds == selected_dataset %}selected{% endif %}>{{ ds }}</option>
+                                {% endfor %}
+                            </select>
+                            {% endif %}
+                            <button class="btn btn-expand" data-target="bar">Expand</button>
+                        </span>
                     </h2>
                     <div class="chart-area">
                         {{ bar_plot | safe }}
@@ -734,6 +806,21 @@ def analytics() -> str:
             const barFigure = {{ bar_fig | tojson }};
             const versionStatsHTML = {{ version_stats_table | tojson }};
             const initialVersion = "{{ selected_version }}";
+
+            const datasetSelect = document.getElementById("dataset");
+            if (datasetSelect) {
+                datasetSelect.addEventListener("change", function (ev) {
+                    const dataset = ev.target.value;
+                    const url = new URL(window.location.href);
+                    if (dataset) {
+                        url.searchParams.set("dataset", dataset);
+                    } else {
+                        url.searchParams.delete("dataset");
+                    }
+                    url.searchParams.delete("version");
+                    window.location.href = url.toString();
+                });
+            }
 
             function cloneFigure(fig) {
                 if (!fig) {
@@ -895,6 +982,8 @@ def analytics() -> str:
 
     return render_template_string(
         template,
+        datasets=dataset_options,
+        selected_dataset=selected_dataset,
         version_stats_table=version_stats_html,
         line_plot=line_html,
         bar_plot=bar_html,

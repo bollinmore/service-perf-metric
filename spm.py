@@ -247,13 +247,23 @@ def merge_data_folders(
     )
 
 
-def serve_webapp(host: str, port: int, debug: bool, result_root: Path) -> None:
+def serve_webapp(host: str, port: int, debug: bool, result_root: Path, base_result_dir: Path) -> None:
     """Start the Flask web application."""
     os.environ["SPM_RESULT_ROOT"] = str(result_root)
+    os.environ["SPM_RESULT_BASE"] = str(base_result_dir)
+    dataset_name = result_root.name if result_root.parent == base_result_dir else ""
+    if dataset_name:
+        os.environ["SPM_DEFAULT_DATASET"] = dataset_name
+    else:
+        os.environ.pop("SPM_DEFAULT_DATASET", None)
     from src import webapp
 
-    webapp.RESULT_DIR = result_root
-    webapp.SUMMARY_FILE = result_root / "summary.csv"
+    configure = getattr(webapp, "configure_result_dirs", None)
+    if callable(configure):
+        configure(result_root, base_result_dir, dataset_name or None)
+    else:
+        webapp.RESULT_DIR = result_root
+        webapp.SUMMARY_FILE = result_root / "summary.csv"
 
     try:
         webapp.app.run(host=host, port=port, debug=debug)
@@ -354,7 +364,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     result_root = result_root_for_data(data_root)
     if not args.no_build:
         generate_reports(data_root, result_root)
-    serve_webapp(args.host, args.port, args.debug, result_root)
+    serve_webapp(args.host, args.port, args.debug, result_root, DEFAULT_RESULT_DIR)
 
 
 def cmd_merge(args: argparse.Namespace) -> None:

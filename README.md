@@ -16,6 +16,7 @@ Browse performance CSV outputs in a browser and generate summary reports.
   - `python spm.py serve --data data2` (shorthand: `python spm.py serve data2`)
   - Open tables at `http://localhost:8000/`
   - Analytics dashboard at `http://localhost:8000/analytics`
+  - Switch datasets through the Average Loading Time card dropdown to compare different `result/<data-folder>` outputs
 - Clean out generated artifacts anytime:
   - `python spm.py clean`
 
