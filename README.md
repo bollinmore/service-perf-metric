@@ -17,6 +17,8 @@ Browse performance CSV outputs in a browser and generate summary reports.
   - Open tables at `http://localhost:8000/`
   - Analytics dashboard at `http://localhost:8000/analytics`
   - Switch datasets through the Average Loading Time card dropdown to compare different `result/<data-folder>` outputs
+- Run the Flask app directly (custom host/port as needed):
+  - `python src/webapp.py --host 127.0.0.1 --port 5001`
 - Clean out generated artifacts anytime:
   - `python spm.py clean`
 

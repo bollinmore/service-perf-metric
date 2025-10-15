@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
@@ -1096,5 +1097,16 @@ def analytics_bardata():
     })
 
 
+def main(argv: List[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run the Service Performance Metric web application")
+    parser.add_argument("--host", default="0.0.0.0", help="Host interface to bind (default: 0.0.0.0)")
+    parser.add_argument("--port", default=8000, type=int, help="Port to listen on (default: 8000)")
+    parser.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
+    args = parser.parse_args(argv)
+
+    app.run(debug=args.debug, host=args.host, port=args.port)
+    return 0
+
+
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8000)
+    raise SystemExit(main())
