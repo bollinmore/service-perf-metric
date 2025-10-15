@@ -276,7 +276,13 @@ def _prepare_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str], pd.Data
     if melted.empty:
         raise ValueError("summary.csv does not contain numeric data")
 
-    service_order = df["service"].dropna().drop_duplicates().tolist()
+    service_order = (
+        df["service"]
+        .dropna()
+        .drop_duplicates()
+        .sort_values(key=lambda col: col.str.casefold())
+        .tolist()
+    )
     return df, version_cols, melted, service_order
 
 
@@ -399,6 +405,8 @@ def _build_box_from_stats(
 
     fig = go.Figure()
     targets = service_order if service_order else stats_df.index.tolist()
+    if not service_order:
+        targets = sorted(stats_df.index.tolist(), key=lambda s: str(s).casefold())
     for service in targets:
         if service not in stats_df.index:
             continue
@@ -515,6 +523,10 @@ def analytics() -> str:
             service_avg_multi["service"], categories=service_order, ordered=True
         )
         service_avg_multi = service_avg_multi.sort_values("service")
+    else:
+        service_avg_multi = service_avg_multi.sort_values(
+            "service", key=lambda col: col.astype(str).str.casefold()
+        )
 
     wide = pd.DataFrame()
     if not service_avg_multi.empty:
@@ -1164,7 +1176,10 @@ def analytics_bardata():
             service_avg_multi["service"], categories=service_order, ordered=True
         )
         service_avg_multi = service_avg_multi.sort_values("service")
-
+    else:
+        service_avg_multi = service_avg_multi.sort_values(
+            "service", key=lambda col: col.astype(str).str.casefold()
+        )
     if service_avg_multi.empty:
         return jsonify(response_payload)
 
