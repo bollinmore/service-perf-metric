@@ -343,6 +343,51 @@ def _build_bar_figure_from_wide(wide: pd.DataFrame, version_cols: List[str]) -> 
     return fig
 
 
+def _validate_dataset_requirements(melted: pd.DataFrame) -> Tuple[List[str], str | None]:
+    warnings: List[str] = []
+    error: str | None = None
+
+    if melted.empty:
+        return warnings, error
+
+    cleaned = melted.copy()
+    cleaned["service"] = cleaned["service"].astype(str).str.strip()
+
+    unique_services = sorted(cleaned["service"].dropna().unique())
+    service_count = len(unique_services)
+    if service_count != 24:
+        warnings.append(f"警告：Dataset 需包含 24 個服務，當前為 {service_count} 個。")
+
+    service_counts = cleaned.groupby("service")["loading_time"].count()
+
+    auto_service = None
+    for service_name in service_counts.index:
+        if service_name.upper() == "AUTO TEST":
+            auto_service = service_name
+            break
+
+    if auto_service is None:
+        error = "錯誤：Dataset 缺少必要的 'AUTO TEST' 服務。"
+        return warnings, error
+
+    baseline = int(service_counts.get(auto_service, 0))
+    mismatched: List[str] = []
+    for service_name, count in service_counts.items():
+        count = int(count)
+        if service_name == auto_service:
+            continue
+        if count != baseline:
+            mismatched.append(f"{service_name}（{count} 筆）")
+
+    if mismatched:
+        mismatched_services = "、".join(mismatched)
+        warnings.append(
+            f"警告：以下服務的樣本數量與 AUTO TEST（{baseline} 筆）不一致：{mismatched_services}。"
+        )
+
+    return warnings, error
+
+
 def _build_box_from_stats(
     stats_df: pd.DataFrame,
     version: str,
@@ -436,6 +481,11 @@ def analytics() -> str:
     available_box_versions = [v for v in version_cols if v in stats_versions]
     dropdown_versions = available_box_versions if available_box_versions else version_cols
 
+    dataset_warnings, dataset_error = _validate_dataset_requirements(melted)
+    bar_alerts: List[str] = list(dataset_warnings)
+    if dataset_error:
+        bar_alerts.append(dataset_error)
+
     selected_version = request.args.get("version")
     if not selected_version or selected_version not in dropdown_versions:
         selected_version = dropdown_versions[0]
@@ -477,6 +527,8 @@ def analytics() -> str:
     bar_html = "<p>No data available for bar chart.</p>"
     line_fig_payload = {}
     bar_fig_payload = {}
+    if dataset_error:
+        bar_html = f"<p class=\"message error\">{dataset_error}</p>"
     if not wide.empty:
         fig_line = go.Figure()
         for version in version_cols:
@@ -499,9 +551,10 @@ def analytics() -> str:
         line_html = to_html(fig_line, include_plotlyjs=False, full_html=False)
         line_fig_payload = json.loads(fig_line.to_json())
 
-        fig_bar = _build_bar_figure_from_wide(wide, version_cols)
-        bar_html = to_html(fig_bar, include_plotlyjs=False, full_html=False)
-        bar_fig_payload = json.loads(fig_bar.to_json())
+        if not dataset_error:
+            fig_bar = _build_bar_figure_from_wide(wide, version_cols)
+            bar_html = to_html(fig_bar, include_plotlyjs=False, full_html=False)
+            bar_fig_payload = json.loads(fig_bar.to_json())
 
     template = """
     <!doctype html>
@@ -625,6 +678,14 @@ def analytics() -> str:
             .message {
                 color: #6b7280;
                 font-size: 0.9rem;
+            }
+            .message.error {
+                color: #d14343;
+                font-weight: 600;
+            }
+            .message.warning {
+                color: #b7791f;
+                font-weight: 600;
             }
             .card-actions {
                 display: flex;
@@ -823,6 +884,10 @@ def analytics() -> str:
             const versionStatsHTML = {{ version_stats_table | tojson }};
             const initialVersion = "{{ selected_version }}";
             const barDataEndpoint = "{{ bar_data_endpoint }}";
+            const barAlerts = {{ bar_alerts | tojson }};
+            if (Array.isArray(barAlerts) && barAlerts.length) {
+                barAlerts.forEach((msg) => alert(msg));
+            }
 
             const datasetSelect = document.getElementById("dataset");
             const initialDataset = "{{ selected_dataset }}";
@@ -996,11 +1061,21 @@ def analytics() -> str:
                                     return resp.json();
                                 })
                                 .then((payload) => {
-                                    if (payload.figure) {
-                                        currentBarFigure = payload.figure;
-                                        currentBarDataset = payload.dataset || chosen || "";
+                                    if (Array.isArray(payload.warnings)) {
+                                        payload.warnings.forEach((msg) => alert(msg));
+                                    }
+                                    if (payload.error) {
+                                        alert(payload.error);
+                                    }
+                                    currentBarDataset = payload.dataset || chosen || "";
+                                    if (dsSelect.value !== currentBarDataset) {
                                         dsSelect.value = currentBarDataset;
-                                        renderResponsivePlot(barContainer, payload.figure);
+                                    }
+                                    currentBarFigure = payload.figure || { data: [], layout: {} };
+                                    if (!payload.error && currentBarFigure.data && currentBarFigure.data.length) {
+                                        renderResponsivePlot(barContainer, currentBarFigure);
+                                    } else {
+                                        Plotly.purge(barContainer);
                                     }
                                 })
                                 .catch((err) => {
@@ -1053,6 +1128,7 @@ def analytics() -> str:
         selected_version=selected_version,
         box_figures=box_figures,
         bar_data_endpoint=url_for("analytics_bardata"),
+        bar_alerts=bar_alerts,
     )
 
 
@@ -1070,6 +1146,16 @@ def analytics_bardata():
     except (ValueError, FileNotFoundError) as exc:
         abort(404, str(exc))
 
+    dataset_warnings, dataset_error = _validate_dataset_requirements(melted)
+    response_payload = {
+        "dataset": dataset or "",
+        "warnings": dataset_warnings,
+        "error": dataset_error,
+        "figure": {"data": [], "layout": {}},
+    }
+    if dataset_error:
+        return jsonify(response_payload)
+
     service_avg_multi = (
         melted.groupby(["service", "version"])["loading_time"].mean().reset_index()
     )
@@ -1080,7 +1166,7 @@ def analytics_bardata():
         service_avg_multi = service_avg_multi.sort_values("service")
 
     if service_avg_multi.empty:
-        return jsonify({"figure": {"data": [], "layout": {}}, "dataset": dataset or ""})
+        return jsonify(response_payload)
 
     wide = service_avg_multi.pivot(index="service", columns="version", values="loading_time")
     if service_order:
@@ -1088,13 +1174,11 @@ def analytics_bardata():
     wide = wide.dropna(how="all")
 
     if wide.empty:
-        return jsonify({"figure": {"data": [], "layout": {}}, "dataset": dataset or ""})
+        return jsonify(response_payload)
 
     fig_bar = _build_bar_figure_from_wide(wide, version_cols)
-    return jsonify({
-        "figure": json.loads(fig_bar.to_json()),
-        "dataset": dataset or "",
-    })
+    response_payload["figure"] = json.loads(fig_bar.to_json())
+    return jsonify(response_payload)
 
 
 def main(argv: List[str] | None = None) -> int:
