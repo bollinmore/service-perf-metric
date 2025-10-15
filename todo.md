@@ -1,0 +1,4 @@
+- [ ] 把 View 的部分跟 Logic 分開放
+- [ ] Average Loading Time (Grouped Bar) 改名為 Loading Time
+  - [ ] 可選擇顯示平均、最大、最小、中位數
+- [ ] 產生績效報表，如果指定版本跟比較對象發現效能降低超過 30%，要特別註記
