@@ -1,7 +1,7 @@
 - [ ] 把 View 的部分跟 Logic 分開放
 - [ ] Average Loading Time (Grouped Bar) 改名為 Loading Time
   - [ ] 可選擇顯示平均、最大、最小、中位數
-- [ ] 產生績效報表，如果指定版本跟比較對象發現效能降低超過 30%，要特別註記
+- [x] 產生績效報表，如果指定版本跟比較對象發現效能降低超過 30%，要特別註記
   ```prompt
   1. 在 sidebar 新增一個按鈕 - Compare
   2. 在 Compare 頁面中主要呈現的方式是一個表格：

@@ -469,7 +469,7 @@ def _build_box_from_stats(
 
 
 def _render_dashboard_page(active_view: str) -> str:
-    view_mode = active_view if active_view in {"analytics", "reports"} else "analytics"
+    view_mode = active_view if active_view in {"analytics", "reports", "compare"} else "analytics"
     dataset_param = request.args.get("dataset")
     dataset_options = _available_datasets()
     active_dataset = dataset_param or DEFAULT_DATASET_NAME
@@ -510,6 +510,15 @@ def _render_dashboard_page(active_view: str) -> str:
     bar_alerts: List[str] = list(dataset_warnings)
     if dataset_error:
         bar_alerts.append(dataset_error)
+
+    compare_version_a = request.args.get("compareA")
+    compare_version_b = request.args.get("compareB")
+    if compare_version_a not in version_cols:
+        compare_version_a = version_cols[0] if version_cols else ""
+    if compare_version_b not in version_cols:
+        compare_version_b = (
+            version_cols[1] if len(version_cols) > 1 else compare_version_a
+        )
 
     selected_version = request.args.get("version")
     if not selected_version or selected_version not in dropdown_versions:
@@ -584,6 +593,29 @@ def _render_dashboard_page(active_view: str) -> str:
             fig_bar = _build_bar_figure_from_wide(wide, version_cols)
             bar_html = to_html(fig_bar, include_plotlyjs=False, full_html=False)
             bar_fig_payload = json.loads(fig_bar.to_json())
+    compare_data: Dict[str, Dict[str, float]] = {}
+    compare_services: List[str] = []
+    if not service_avg_multi.empty:
+        pivot = service_avg_multi.pivot(
+            index="service", columns="version", values="loading_time"
+        )
+        if service_order:
+            pivot = pivot.reindex(service_order)
+        compare_services = [
+            svc for svc in pivot.index.tolist() if isinstance(svc, str)
+        ]
+        for svc in compare_services:
+            row = pivot.loc[svc]
+            svc_values: Dict[str, float] = {}
+            for ver in version_cols:
+                val = row.get(ver)
+                if pd.notna(val):
+                    try:
+                        svc_values[ver] = float(val)
+                    except Exception:
+                        continue
+            if svc_values:
+                compare_data[svc] = svc_values
 
     template = """
     <!doctype html>
@@ -871,6 +903,69 @@ def _render_dashboard_page(active_view: str) -> str:
                 color: #52606d;
                 margin-left: 0.5rem;
             }
+            .compare-card {
+                background: #fff;
+                border-radius: 12px;
+                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+                padding: 1.25rem;
+                display: flex;
+                flex-direction: column;
+                gap: 1rem;
+            }
+            .compare-header {
+                display: flex;
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+            .compare-header h2 {
+                margin: 0;
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #1f2933;
+            }
+            .compare-controls {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 0.75rem;
+            }
+            .compare-controls label {
+                font-weight: 600;
+                color: #4a4f57;
+            }
+            .compare-table-wrapper {
+                overflow: auto;
+            }
+            #compareTable {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            #compareTable th,
+            #compareTable td {
+                border: 1px solid #e0e4ea;
+                padding: 0.45rem 0.6rem;
+                font-size: 0.9rem;
+                text-align: left;
+            }
+            #compareTable thead {
+                background: #f2f4f8;
+                position: sticky;
+                top: 0;
+            }
+            #compareTable td.value {
+                text-align: right;
+            }
+            #compareTable td.diff-positive {
+                color: #0f7a0f;
+                font-weight: 600;
+            }
+            #compareTable td.diff-negative {
+                color: #d14343;
+                font-weight: 600;
+            }
+            #compareTable td.diff-neutral {
+                color: #52606d;
+            }
             #reportContent {
                 flex: 1;
                 overflow: auto;
@@ -1015,6 +1110,10 @@ def _render_dashboard_page(active_view: str) -> str:
                     <span class="icon">&#128196;</span>
                     <span class="label">Reports</span>
                 </button>
+                <button class="sidebar-btn{% if active_view == 'compare' %} active{% endif %}" data-view="compare" aria-label="Compare">
+                    <span class="icon">&#128200;</span>
+                    <span class="label">Compare</span>
+                </button>
             </aside>
             <div class="main-shell">
                 <header>
@@ -1104,6 +1203,46 @@ def _render_dashboard_page(active_view: str) -> str:
                             </div>
                         </div>
                     </section>
+                    <section id="panel-compare" class="panel{% if active_view == 'compare' %} active{% endif %}">
+                        <div class="compare-card">
+                            <div class="compare-header">
+                                <h2>Version Comparison</h2>
+                                {% if versions %}
+                                <div class="compare-controls">
+                                    <label for="compareVersionA">Version A</label>
+                                    <select id="compareVersionA" name="compareA">
+                                        {% for ver in versions %}
+                                            <option value="{{ ver }}" {% if ver == compare_default_a %}selected{% endif %}>{{ ver }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <label for="compareVersionB">Version B</label>
+                                    <select id="compareVersionB" name="compareB">
+                                        {% for ver in versions %}
+                                            <option value="{{ ver }}" {% if ver == compare_default_b %}selected{% endif %}>{{ ver }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                {% endif %}
+                            </div>
+                            <div class="compare-table-wrapper">
+                                <table id="compareTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Service</th>
+                                            <th id="compareColA">Version A</th>
+                                            <th id="compareColB">Version B</th>
+                                            <th>Change</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="compareTableBody">
+                                        <tr>
+                                            <td colspan="4" class="message">No comparison data available.</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
                 </main>
             </div>
         </div>
@@ -1117,6 +1256,7 @@ def _render_dashboard_page(active_view: str) -> str:
                 <div class="overlay-body" id="overlayBody"></div>
             </div>
         </div>
+
 
         <script>
 (() => {
@@ -1133,15 +1273,18 @@ def _render_dashboard_page(active_view: str) -> str:
   const initialDataset = "{{ selected_dataset }}";
   const initialReport = "{{ initial_report }}";
   const reportFiles = {{ report_files | tojson }};
+  const compareData = {{ compare_data | tojson }};
+  const compareServices = {{ compare_services | tojson }};
+  const compareDefaultA = "{{ compare_default_a }}";
+  const compareDefaultB = "{{ compare_default_b }}";
 
   const versionSelect = document.getElementById("version");
   const datasetSelect = document.getElementById("dataset");
-  const sidebarButtons = Array.from(document.querySelectorAll(
-    ".sidebar-btn"
-  ));
+  const sidebarButtons = Array.from(document.querySelectorAll(".sidebar-btn"));
   const panels = {
     analytics: document.getElementById("panel-analytics"),
     reports: document.getElementById("panel-reports"),
+    compare: document.getElementById("panel-compare"),
   };
   const viewIndicator = document.getElementById("viewIndicator");
   const reportList = document.getElementById("reportList");
@@ -1151,13 +1294,16 @@ def _render_dashboard_page(active_view: str) -> str:
   const overlayBody = document.getElementById("overlayBody");
   const overlayTitle = document.getElementById("overlayTitle");
   const overlayClose = document.getElementById("overlayClose");
-  const overlayBackdrop = overlay
-    ? overlay.querySelector(".overlay-backdrop")
-    : null;
+  const overlayBackdrop = overlay ? overlay.querySelector(".overlay-backdrop") : null;
+  const comparePanel = document.getElementById("panel-compare");
+  const compareVersionASelect = document.getElementById("compareVersionA");
+  const compareVersionBSelect = document.getElementById("compareVersionB");
+  const compareTableBody = document.getElementById("compareTableBody");
+  const compareColA = document.getElementById("compareColA");
+  const compareColB = document.getElementById("compareColB");
 
-  let currentView = initialView === "reports" ? "reports" : "analytics";
-  let currentBarDataset = initialDataset ||
-    (datasetSelect ? datasetSelect.value : "");
+  let currentView = initialView === "reports" || initialView === "compare" ? initialView : "analytics";
+  let currentBarDataset = initialDataset || (datasetSelect ? datasetSelect.value : "");
   let reportViewerLoaded = false;
   let activeReportFile = initialReport || "";
   let overlayVersionSelect = null;
@@ -1181,10 +1327,7 @@ def _render_dashboard_page(active_view: str) -> str:
     }
     const layout = Object.assign({}, fig.layout);
     layout.autosize = true;
-    layout.margin = Object.assign(
-      { l: 40, r: 20, t: 55, b: 50 },
-      layout.margin || {}
-    );
+    layout.margin = Object.assign({ l: 40, r: 20, t: 55, b: 50 }, layout.margin || {});
     return Object.assign({}, fig, { layout });
   }
 
@@ -1197,10 +1340,7 @@ def _render_dashboard_page(active_view: str) -> str:
       return false;
     }
     const plotFig = applyLayoutTweaks(cloneFigure(fig));
-    Plotly.newPlot(container, plotFig.data, plotFig.layout, {
-      responsive: true,
-      displaylogo: false,
-    });
+    Plotly.newPlot(container, plotFig.data, plotFig.layout, { responsive: true, displaylogo: false });
     setTimeout(() => Plotly.Plots.resize(container), 0);
     return true;
   }
@@ -1245,9 +1385,7 @@ def _render_dashboard_page(active_view: str) -> str:
     if (!reportTitle) {
       return;
     }
-    const datasetLabel = (datasetSelect && datasetSelect.value) ||
-      initialDataset ||
-      "default";
+    const datasetLabel = (datasetSelect && datasetSelect.value) || initialDataset || "default";
     if (file) {
       reportTitle.innerHTML = `Preview <small>${datasetLabel} ? ${file}</small>`;
     } else if (datasetLabel) {
@@ -1299,6 +1437,113 @@ def _render_dashboard_page(active_view: str) -> str:
     reportContent.appendChild(table);
   }
 
+  function getCompareValue(service, version) {
+    if (!compareData || !service || !version) {
+      return null;
+    }
+    const svcRow = compareData[service];
+    if (!svcRow) {
+      return null;
+    }
+    const val = svcRow[version];
+    return typeof val === "number" ? val : null;
+  }
+
+  function formatMs(value) {
+    if (value === null || value === undefined) {
+      return "?";
+    }
+    return `${value.toFixed(1)} ms`;
+  }
+
+  function formatDiff(valueA, valueB) {
+    if (valueA === null || valueB === null) {
+      return { text: "?", cls: "diff-neutral" };
+    }
+    if (valueA === 0) {
+      return { text: "N/A", cls: "diff-neutral" };
+    }
+    const pct = ((valueB - valueA) / valueA) * 100;
+    const text = `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+    let cls = "diff-neutral";
+    if (pct > 0.5) {
+      cls = "diff-negative";
+    } else if (pct < -0.5) {
+      cls = "diff-positive";
+    }
+    return { text, cls };
+  }
+
+  function updateCompareTable() {
+    if (!compareTableBody) {
+      return;
+    }
+    const versionA = compareVersionASelect ? compareVersionASelect.value : compareDefaultA;
+    const versionB = compareVersionBSelect ? compareVersionBSelect.value : compareDefaultB;
+    if (compareColA) {
+      compareColA.textContent = versionA ? `${versionA} (avg ms)` : "Version A";
+    }
+    if (compareColB) {
+      compareColB.textContent = versionB ? `${versionB} (avg ms)` : "Version B";
+    }
+
+    compareTableBody.innerHTML = "";
+    if (!compareServices.length || !versionA || !versionB) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.textContent = "No comparison data available.";
+      cell.colSpan = 4;
+      cell.className = "message";
+      row.appendChild(cell);
+      compareTableBody.appendChild(row);
+      return;
+    }
+
+    compareServices.forEach((service) => {
+      const row = document.createElement("tr");
+      const cellService = document.createElement("td");
+      cellService.textContent = service;
+      row.appendChild(cellService);
+
+      const valueA = getCompareValue(service, versionA);
+      const valueB = getCompareValue(service, versionB);
+
+      const cellA = document.createElement("td");
+      cellA.className = "value";
+      cellA.textContent = formatMs(valueA);
+      row.appendChild(cellA);
+
+      const cellB = document.createElement("td");
+      cellB.className = "value";
+      cellB.textContent = formatMs(valueB);
+      row.appendChild(cellB);
+
+      const diffCell = document.createElement("td");
+      diffCell.classList.add("value");
+      const diff = formatDiff(valueA, valueB);
+      diffCell.textContent = diff.text;
+      diffCell.classList.add(diff.cls || "diff-neutral");
+      row.appendChild(diffCell);
+
+      compareTableBody.appendChild(row);
+    });
+
+    if (currentView === "compare") {
+      const url = new URL(window.location.href);
+      if (versionA) {
+        url.searchParams.set("compareA", versionA);
+      } else {
+        url.searchParams.delete("compareA");
+      }
+      if (versionB) {
+        url.searchParams.set("compareB", versionB);
+      } else {
+        url.searchParams.delete("compareB");
+      }
+      window.history.replaceState(null, "", url);
+    }
+  }
+
   function loadReport(file) {
     if (!file) {
       showReportMessage("Select a CSV to preview.");
@@ -1310,9 +1555,9 @@ def _render_dashboard_page(active_view: str) -> str:
     showReportMessage("Loading report...");
     const params = new URLSearchParams();
     params.set("file", file);
-    const currentDataset = datasetSelect ? datasetSelect.value : initialDataset;
-    if (currentDataset) {
-      params.set("dataset", currentDataset);
+    const currentDatasetValue = datasetSelect ? datasetSelect.value : initialDataset;
+    if (currentDatasetValue) {
+      params.set("dataset", currentDatasetValue);
     }
     fetch(`${csvApiEndpoint}?${params.toString()}`)
       .then((resp) => {
@@ -1338,22 +1583,35 @@ def _render_dashboard_page(active_view: str) -> str:
   }
 
   function updateView(view) {
-    const targetView = view === "reports" && panels.reports ? "reports" : "analytics";
+    let targetView = "analytics";
+    if (view === "reports" && panels.reports) {
+      targetView = "reports";
+    } else if (view === "compare" && panels.compare) {
+      targetView = "compare";
+    }
     currentView = targetView;
+
     Object.entries(panels).forEach(([key, panel]) => {
       if (panel) {
         panel.classList.toggle("active", key === targetView);
       }
     });
+
     sidebarButtons.forEach((btn) => {
       const isActive = btn.dataset.view === targetView;
       btn.classList.toggle("active", isActive);
       btn.setAttribute("aria-current", isActive ? "page" : "false");
     });
+
     if (viewIndicator) {
       viewIndicator.textContent =
-        targetView === "analytics" ? "Analytics Dashboard" : "CSV Reports";
+        targetView === "analytics"
+          ? "Analytics Dashboard"
+          : targetView === "reports"
+            ? "CSV Reports"
+            : "Version Comparison";
     }
+
     const url = new URL(window.location.href);
     url.searchParams.set("view", targetView);
     window.history.replaceState(null, "", url);
@@ -1370,61 +1628,9 @@ def _render_dashboard_page(active_view: str) -> str:
           showReportMessage("No CSV files found for this dataset.");
         }
       }
+    } else if (targetView === "compare") {
+      updateCompareTable();
     }
-  }
-
-  sidebarButtons.forEach((btn) => {
-    btn.addEventListener("click", (event) => {
-      event.preventDefault();
-      updateView(btn.dataset.view || "analytics");
-    });
-  });
-
-  if (reportList) {
-    reportList.addEventListener("click", (event) => {
-      const button = event.target.closest(".report-link");
-      if (!button) {
-        return;
-      }
-      event.preventDefault();
-      loadReport(button.dataset.file);
-    });
-  }
-
-  if (datasetSelect) {
-    datasetSelect.addEventListener("change", (ev) => {
-      const dataset = ev.target.value;
-      const url = new URL(window.location.href);
-      if (dataset) {
-        url.searchParams.set("dataset", dataset);
-      } else {
-        url.searchParams.delete("dataset");
-      }
-      url.searchParams.delete("version");
-      url.searchParams.delete("report");
-      url.searchParams.set("view", currentView);
-      window.location.href = url.toString();
-    });
-  }
-
-  if (versionSelect) {
-    versionSelect.addEventListener("change", (ev) => {
-      const version = ev.target.value;
-      const url = new URL(window.location.href);
-      url.searchParams.set("version", version);
-      url.searchParams.set("view", currentView);
-      window.history.replaceState(null, "", url);
-      renderBoxFigure(version);
-      if (overlayVersionSelect) {
-        overlayVersionSelect.value = version;
-      }
-      if (overlayBoxContainer) {
-        renderResponsivePlot(
-          overlayBoxContainer,
-          boxFigures[version] || { data: [], layout: {} }
-        );
-      }
-    });
   }
 
   function closeOverlay() {
@@ -1500,7 +1706,7 @@ def _render_dashboard_page(active_view: str) -> str:
       }
     } else if (target === "bar") {
       overlayTitle.textContent = "Average Loading Time (Grouped Bar)";
-      let barContainer = document.createElement("div");
+      const barContainer = document.createElement("div");
       barContainer.className = "plot-container";
       if (datasetSelect) {
         const controls = document.createElement("div");
@@ -1580,9 +1786,82 @@ def _render_dashboard_page(active_view: str) -> str:
     }
   });
 
+  if (reportList) {
+    reportList.addEventListener("click", (event) => {
+      const button = event.target.closest(".report-link");
+      if (!button) {
+        return;
+      }
+      event.preventDefault();
+      loadReport(button.dataset.file);
+    });
+  }
+
+  if (datasetSelect) {
+    datasetSelect.addEventListener("change", (ev) => {
+      const dataset = ev.target.value;
+      const url = new URL(window.location.href);
+      if (dataset) {
+        url.searchParams.set("dataset", dataset);
+      } else {
+        url.searchParams.delete("dataset");
+      }
+      url.searchParams.delete("version");
+      url.searchParams.delete("report");
+      url.searchParams.delete("compareA");
+      url.searchParams.delete("compareB");
+      url.searchParams.set("view", currentView);
+      window.location.href = url.toString();
+    });
+  }
+
+  if (versionSelect) {
+    versionSelect.addEventListener("change", (ev) => {
+      const version = ev.target.value;
+      const url = new URL(window.location.href);
+      url.searchParams.set("version", version);
+      url.searchParams.set("view", currentView);
+      window.history.replaceState(null, "", url);
+      renderBoxFigure(version);
+      if (overlayVersionSelect) {
+        overlayVersionSelect.value = version;
+      }
+      if (overlayBoxContainer) {
+        renderResponsivePlot(
+          overlayBoxContainer,
+          boxFigures[version] || { data: [], layout: {} }
+        );
+      }
+    });
+  }
+
+  if (compareVersionASelect) {
+    compareVersionASelect.addEventListener("change", () => {
+      updateCompareTable();
+    });
+  }
+  if (compareVersionBSelect) {
+    compareVersionBSelect.addEventListener("change", () => {
+      updateCompareTable();
+    });
+  }
+
+  sidebarButtons.forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      updateView(btn.dataset.view || "analytics");
+    });
+  });
+
   const initialBoxVersion = (initialVersion && boxFigures[initialVersion])
     ? initialVersion
     : (versionsList[0] || null);
+  if (compareVersionASelect && compareDefaultA) {
+    compareVersionASelect.value = compareDefaultA;
+  }
+  if (compareVersionBSelect && compareDefaultB) {
+    compareVersionBSelect.value = compareDefaultB;
+  }
   if (initialBoxVersion) {
     if (versionSelect && versionSelect.value !== initialBoxVersion) {
       versionSelect.value = initialBoxVersion;
@@ -1600,6 +1879,9 @@ def _render_dashboard_page(active_view: str) -> str:
     loadReport(activeReportFile || reportFiles[0]);
   } else if (currentView === "reports") {
     showReportMessage("No CSV files found for this dataset.");
+  }
+  if (currentView === "compare") {
+    updateCompareTable();
   }
 })();
         </script>
@@ -1627,6 +1909,10 @@ def _render_dashboard_page(active_view: str) -> str:
         report_files=report_files,
         initial_report=initial_report,
         csv_api_endpoint=csv_api_endpoint,
+        compare_services=compare_services,
+        compare_data=compare_data,
+        compare_default_a=compare_version_a,
+        compare_default_b=compare_version_b,
     )
 
 
