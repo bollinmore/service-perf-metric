@@ -1,7 +1,7 @@
 - [ ] 把 View 的部分跟 Logic 分開放
 - [ ] Average Loading Time (Grouped Bar) 改名為 Loading Time
   - [ ] 可選擇顯示平均、最大、最小、中位數
-- [x] 產生績效報表，如果指定版本跟比較對象發現效能降低超過 30%，要特別註記
+- [ ] 產生績效報表，如果指定版本跟比較對象發現效能降低超過 30%，要特別註記
   ```prompt
   1. 在 sidebar 新增一個按鈕 - Compare
   2. 在 Compare 頁面中主要呈現的方式是一個表格：
@@ -11,7 +11,7 @@
       - 第三個欄位的比較呈現為百分比格式，資料為為第二欄跟第一欄的內容比較結果
     - 第一欄與第二欄的每個資料為服務的平均時間
   ```
-- [ ] 修改首頁，使 Analytics Dashboard 就是網站的首頁，並加入側邊攔提供原始查看 csv 的功能
+- [x] 修改首頁，使 Analytics Dashboard 就是網站的首頁，並加入側邊攔提供原始查看 csv 的功能
   ```prompt
   1. 把 Analytics Dashboard 變成預設首頁
   2. 仿造 vscode 增加左側 sidebar, 預設就是 Analytics Dashboard
