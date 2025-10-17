@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import csv
@@ -10,7 +10,7 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.io import to_html
-from flask import Flask, abort, jsonify, render_template_string, request, send_file, url_for
+from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file, url_for
 
 
 app = Flask(__name__)
@@ -61,6 +61,12 @@ def _list_csv_files() -> List[Path]:
     return sorted(p for p in RESULT_DIR.rglob("*.csv") if p.is_file())
 
 
+def _list_csv_files_under(root: Path) -> List[Path]:
+    if not root.exists():
+        return []
+    return sorted(p for p in root.rglob("*.csv") if p.is_file())
+
+
 def _available_datasets() -> List[str]:
     if not RESULT_BASE_DIR.exists():
         return []
@@ -85,13 +91,14 @@ def _result_dir_for_dataset(dataset: str | None) -> Path:
     return candidate
 
 
-def _safe_resolve(rel_path: str) -> Path:
+def _safe_resolve(rel_path: str, base: Path | None = None) -> Path:
+    base_dir = base or RESULT_DIR
     try:
-        candidate = (RESULT_DIR / rel_path).resolve(strict=True)
+        candidate = (base_dir / rel_path).resolve(strict=True)
     except FileNotFoundError as exc:
         raise FileNotFoundError from exc
 
-    if RESULT_DIR not in candidate.parents and candidate != RESULT_DIR:
+    if base_dir not in candidate.parents and candidate != base_dir:
         raise FileNotFoundError("Path outside of result directory")
     if not candidate.is_file():
         raise FileNotFoundError("Not a file")
@@ -100,46 +107,23 @@ def _safe_resolve(rel_path: str) -> Path:
     return candidate
 
 
+def _read_csv_rows(target: Path) -> List[List[str]]:
+    rows: List[List[str]] = []
+    try:
+        with target.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            rows = [row for row in reader]
+    except UnicodeDecodeError:
+        with target.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            rows = [row for row in reader]
+    return rows
+
+
 @app.route("/")
 def index() -> str:
-    csv_files = _list_csv_files()
-    files = [f.relative_to(RESULT_DIR).as_posix() for f in csv_files]
-    has_summary = SUMMARY_FILE.exists()
-
-    template = """
-    <!doctype html>
-    <html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <title>CSV Browser</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 2rem; }
-            h1 { margin-bottom: 1rem; }
-            ul { list-style: none; padding: 0; }
-            li { margin-bottom: 0.5rem; }
-            a { text-decoration: none; color: #1a73e8; }
-            a:hover { text-decoration: underline; }
-            .empty { color: #666; }
-        </style>
-    </head>
-    <body>
-        <h1>Available CSV Reports</h1>
-        <p>
-            <a href="{{ url_for('analytics') }}" {% if not has_summary %}class="disabled" title="summary.csv not found"{% endif %}>Analytics Dashboard</a>
-        </p>
-        {% if files %}
-        <ul>
-        {% for f in files %}
-            <li><a href="{{ url_for('view_csv', file=f) }}">{{ f }}</a></li>
-        {% endfor %}
-        </ul>
-        {% else %}
-            <p class="empty">No CSV files found under {{ result_dir }}</p>
-        {% endif %}
-    </body>
-    </html>
-    """
-    return render_template_string(template, files=files, result_dir=RESULT_DIR, has_summary=has_summary)
+    view_param = request.args.get("view", "analytics")
+    return _render_dashboard_page(view_param)
 
 
 @app.route("/view")
@@ -153,18 +137,7 @@ def view_csv() -> str:
     except FileNotFoundError:
         abort(404, "CSV not found")
 
-    rows: List[List[str]] = []
-    try:
-        with target.open("r", encoding="utf-8", newline="") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                rows.append(row)
-    except UnicodeDecodeError:
-        with target.open("r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                rows.append(row)
-
+    rows = _read_csv_rows(target)
     headers = rows[0] if rows else []
     data_rows = rows[1:] if len(rows) > 1 else []
 
@@ -241,6 +214,38 @@ def download_csv():
         abort(404, "CSV not found")
 
     return send_file(target, mimetype="text/csv", as_attachment=True, download_name=target.name)
+
+
+@app.route("/api/csv")
+def api_csv():
+    rel_path = request.args.get("file")
+    if not rel_path:
+        abort(400, "Missing 'file' query parameter")
+
+    dataset_param = request.args.get("dataset")
+    result_root = RESULT_DIR
+    if dataset_param:
+        try:
+            result_root = _result_dir_for_dataset(dataset_param)
+        except (ValueError, FileNotFoundError):
+            abort(404, "Dataset not found")
+
+    try:
+        target = _safe_resolve(rel_path, base=result_root)
+    except FileNotFoundError:
+        abort(404, "CSV not found")
+
+    rows = _read_csv_rows(target)
+    headers = rows[0] if rows else []
+    data_rows = rows[1:] if len(rows) > 1 else []
+    return jsonify(
+        {
+            "file": rel_path,
+            "dataset": dataset_param or "",
+            "headers": headers,
+            "rows": data_rows,
+        }
+    )
 
 
 def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
@@ -362,7 +367,7 @@ def _validate_dataset_requirements(melted: pd.DataFrame) -> Tuple[List[str], str
     unique_services = sorted(cleaned["service"].dropna().unique())
     service_count = len(unique_services)
     if service_count != 24:
-        warnings.append(f"警告：Dataset 需包含 24 個服務，當前為 {service_count} 個。")
+        warnings.append(f"Warning: dataset must include 24 services, found {service_count}.")
 
     service_counts = cleaned.groupby("service")["loading_time"].count()
 
@@ -373,7 +378,7 @@ def _validate_dataset_requirements(melted: pd.DataFrame) -> Tuple[List[str], str
             break
 
     if auto_service is None:
-        error = "錯誤：Dataset 缺少必要的 'AUTO TEST' 服務。"
+        error = "Error: dataset is missing required 'AUTO TEST' service."
         return warnings, error
 
     baseline = int(service_counts.get(auto_service, 0))
@@ -383,13 +388,16 @@ def _validate_dataset_requirements(melted: pd.DataFrame) -> Tuple[List[str], str
         if service_name == auto_service:
             continue
         if count != baseline:
-            mismatched.append(f"{service_name}（{count} 筆）")
+            mismatched.append(f"{service_name} ({count} samples)")
 
     if mismatched:
-        mismatched_services = "、".join(mismatched)
+        mismatch_list = ", ".join(mismatched)
         warnings.append(
-            f"警告：以下服務的樣本數量與 AUTO TEST（{baseline} 筆）不一致：{mismatched_services}。"
+            f"Warning: sample counts differ from AUTO TEST ({baseline} samples): {mismatch_list}."
         )
+
+    return warnings, error
+
 
     return warnings, error
 
@@ -460,8 +468,8 @@ def _build_box_from_stats(
     return fig
 
 
-@app.route("/analytics")
-def analytics() -> str:
+def _render_dashboard_page(active_view: str) -> str:
+    view_mode = active_view if active_view in {"analytics", "reports"} else "analytics"
     dataset_param = request.args.get("dataset")
     dataset_options = _available_datasets()
     active_dataset = dataset_param or DEFAULT_DATASET_NAME
@@ -474,6 +482,15 @@ def analytics() -> str:
         abort(400, str(exc))
     except FileNotFoundError as exc:
         abort(404, str(exc))
+
+    report_paths = _list_csv_files_under(active_result_dir)
+    report_files = [p.relative_to(active_result_dir).as_posix() for p in report_paths]
+    selected_report_param = request.args.get("report")
+    initial_report = (
+        selected_report_param
+        if selected_report_param and selected_report_param in report_files
+        else (report_files[0] if report_files else "")
+    )
 
     if active_dataset and active_dataset not in dataset_options:
         dataset_options = sorted(set(dataset_options + [active_dataset]))
@@ -589,6 +606,53 @@ def analytics() -> str:
             }
             a:hover { text-decoration: underline; }
 
+            .app {
+                display: flex;
+                min-height: 100vh;
+            }
+            .sidebar {
+                width: 70px;
+                background: #1f2933;
+                color: #fff;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                padding: 1rem 0;
+                gap: 1rem;
+                box-shadow: inset -1px 0 0 rgba(15, 23, 42, 0.4);
+            }
+            .sidebar-btn {
+                width: 100%;
+                border: none;
+                background: transparent;
+                color: inherit;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 0.35rem;
+                padding: 0.55rem 0;
+                cursor: pointer;
+                opacity: 0.7;
+                transition: opacity 0.2s ease, background 0.2s ease;
+            }
+            .sidebar-btn .icon {
+                font-size: 1.35rem;
+            }
+            .sidebar-btn .label {
+                font-size: 0.62rem;
+                letter-spacing: 0.08em;
+            }
+            .sidebar-btn.active,
+            .sidebar-btn:hover {
+                opacity: 1;
+                background: rgba(255, 255, 255, 0.12);
+            }
+            .main-shell {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                min-height: 100vh;
+            }
             header {
                 position: sticky;
                 top: 0;
@@ -606,6 +670,11 @@ def analytics() -> str:
                 margin: 0;
                 font-size: 1.4rem;
                 font-weight: 600;
+            }
+            .view-indicator {
+                font-size: 0.85rem;
+                color: #52606d;
+                margin-left: 0.75rem;
             }
             .controls {
                 display: flex;
@@ -630,7 +699,15 @@ def analytics() -> str:
                 background: #fff;
             }
             main {
+                flex: 1;
                 padding: 1.5rem 2rem 2rem;
+                overflow-y: auto;
+            }
+            .panel {
+                display: none;
+            }
+            .panel.active {
+                display: block;
             }
             .grid {
                 display: grid;
@@ -720,9 +797,100 @@ def analytics() -> str:
                 font-size: 0.8rem;
                 padding: 0.25rem 0.5rem;
             }
-            .btn.btn-close {
-                font-size: 0.85rem;
-                padding: 0.35rem 0.7rem;
+           .btn.btn-close {
+               font-size: 0.85rem;
+               padding: 0.35rem 0.7rem;
+           }
+            .reports-layout {
+                display: grid;
+                grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+                gap: 1.5rem;
+                align-items: stretch;
+            }
+            .reports-list,
+            .reports-viewer {
+                background: #fff;
+                border-radius: 12px;
+                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+                min-height: 320px;
+            }
+            .reports-list {
+                padding: 1rem;
+                display: flex;
+                flex-direction: column;
+                max-height: calc(100vh - 220px);
+            }
+            .reports-list h2 {
+                margin: 0 0 0.75rem;
+                font-size: 1rem;
+                font-weight: 600;
+            }
+            .reports-list ul {
+                list-style: none;
+                padding: 0;
+                margin: 0;
+                overflow-y: auto;
+            }
+            .reports-list li {
+                margin-bottom: 0.4rem;
+            }
+            .report-link {
+                width: 100%;
+                border: none;
+                border-radius: 8px;
+                background: #eef2f7;
+                color: #1f2933;
+                font-size: 0.9rem;
+                padding: 0.45rem 0.6rem;
+                text-align: left;
+                cursor: pointer;
+                transition: background 0.2s ease, color 0.2s ease;
+            }
+            .report-link:hover {
+                background: #d9e2f1;
+            }
+            .report-link.active {
+                background: #1a73e8;
+                color: #fff;
+            }
+            .reports-viewer {
+                padding: 1rem;
+                display: flex;
+                flex-direction: column;
+            }
+            .reports-viewer h2 {
+                margin: 0 0 0.75rem;
+                font-size: 1rem;
+                font-weight: 600;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            }
+            .reports-viewer h2 small {
+                font-size: 0.75rem;
+                color: #52606d;
+                margin-left: 0.5rem;
+            }
+            #reportContent {
+                flex: 1;
+                overflow: auto;
+                border-radius: 8px;
+            }
+            #reportContent table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            #reportContent th,
+            #reportContent td {
+                border: 1px solid #e0e4ea;
+                padding: 0.35rem 0.5rem;
+                font-size: 0.88rem;
+                text-align: left;
+            }
+            #reportContent thead {
+                background: #f2f4f8;
+                position: sticky;
+                top: 0;
             }
             .overlay {
                 position: fixed;
@@ -795,6 +963,23 @@ def analytics() -> str:
             }
 
             @media (max-width: 1100px) {
+                .app {
+                    flex-direction: column;
+                }
+                .sidebar {
+                    width: 100%;
+                    flex-direction: row;
+                    justify-content: center;
+                    box-shadow: inset 0 -1px 0 rgba(15, 23, 42, 0.1);
+                }
+                .sidebar-btn {
+                    flex-direction: row;
+                    gap: 0.5rem;
+                    padding: 0.6rem 1rem;
+                }
+                .main-shell {
+                    min-height: auto;
+                }
                 header {
                     flex-direction: column;
                     align-items: flex-start;
@@ -805,6 +990,12 @@ def analytics() -> str:
                 .grid {
                     grid-template-columns: 1fr;
                 }
+                .reports-layout {
+                    grid-template-columns: 1fr;
+                }
+                .reports-list {
+                    max-height: none;
+                }
                 .overlay-content {
                     width: 98vw;
                     height: 94vh;
@@ -814,70 +1005,108 @@ def analytics() -> str:
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     </head>
     <body>
-        <header>
-            <div class="headline">
-                <a href="{{ url_for('index') }}">&#8592; Back</a>
-                <h1>Analytics Dashboard</h1>
+        <div class="app">
+            <aside class="sidebar">
+                <button class="sidebar-btn{% if active_view != 'reports' %} active{% endif %}" data-view="analytics" aria-label="Analytics">
+                    <span class="icon">&#128202;</span>
+                    <span class="label">Analytics</span>
+                </button>
+                <button class="sidebar-btn{% if active_view == 'reports' %} active{% endif %}" data-view="reports" aria-label="Reports">
+                    <span class="icon">&#128196;</span>
+                    <span class="label">Reports</span>
+                </button>
+            </aside>
+            <div class="main-shell">
+                <header>
+                    <div class="headline">
+                        <h1>Service Performance Metric</h1>
+                        <span class="view-indicator" id="viewIndicator"></span>
+                    </div>
+                    <div class="controls"></div>
+                </header>
+                <main>
+                    <section id="panel-analytics" class="panel{% if active_view != 'reports' %} active{% endif %}">
+                        <div class="grid">
+                            <section class="card" data-card="table">
+                                <h2>Per-Version Evolution <span>(Aggregates)</span>
+                                    <button class="btn btn-expand" data-target="table">Expand</button>
+                                </h2>
+                                <div class="chart-area">
+                                    {{ version_stats_table | safe }}
+                                </div>
+                            </section>
+                            <section class="card" data-card="box">
+                                <h2>
+                                    <span>Service Distribution <span>(Box Plot)</span></span>
+                                    <span class="card-actions">
+                                        <label for="version" style="font-weight:600;color:#4a4f57;margin-right:0.5rem;">Version</label>
+                                        <select id="version" name="version" style="margin-right:0.75rem;">
+                                            {% for version in versions %}
+                                                <option value="{{ version }}" {% if version == selected_version %}selected{% endif %}>{{ version }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <button class="btn btn-expand" data-target="box">Expand</button>
+                                    </span>
+                                </h2>
+                                <div class="chart-area">
+                                    <div id="boxPlot"></div>
+                                    <p id="boxMessage" class="message" style="display:none;">No data available for selected version.</p>
+                                </div>
+                            </section>
+                            <section class="card" data-card="line">
+                                <h2>Average Loading Time Trend <span>(Line)</span>
+                                    <button class="btn btn-expand" data-target="line">Expand</button>
+                                </h2>
+                                <div class="chart-area">
+                                    {{ line_plot | safe }}
+                                </div>
+                            </section>
+                            <section class="card" data-card="bar">
+                                <h2>
+                                    <span>Average Loading Time <span>(Grouped Bar)</span></span>
+                                    <span class="card-actions">
+                                        {% if datasets %}
+                                        <label for="dataset" style="font-weight:600;color:#4a4f57;margin-right:0.5rem;">Dataset</label>
+                                        <select id="dataset" name="dataset" style="margin-right:0.75rem;">
+                                            {% for ds in datasets %}
+                                                <option value="{{ ds }}" {% if ds == selected_dataset %}selected{% endif %}>{{ ds }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        {% endif %}
+                                        <button class="btn btn-expand" data-target="bar">Expand</button>
+                                    </span>
+                                </h2>
+                                <div class="chart-area">
+                                    {{ bar_plot | safe }}
+                                </div>
+                            </section>
+                        </div>
+                    </section>
+                    <section id="panel-reports" class="panel{% if active_view == 'reports' %} active{% endif %}">
+                        <div class="reports-layout">
+                            <div class="reports-list">
+                                <h2>CSV Reports</h2>
+                                {% if report_files %}
+                                <ul id="reportList">
+                                    {% for f in report_files %}
+                                        <li><button type="button" class="report-link" data-file="{{ f }}">{{ f }}</button></li>
+                                    {% endfor %}
+                                </ul>
+                                {% else %}
+                                <p class="message">No CSV files found for this dataset.</p>
+                                {% endif %}
+                            </div>
+                            <div class="reports-viewer">
+                                <h2 id="reportTitle">Preview{% if selected_dataset %} <small>{{ selected_dataset }}</small>{% endif %}</h2>
+                                <div id="reportContent">
+                                    <p class="message">Select a CSV to preview.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </main>
             </div>
-            <div class="controls"></div>
-        </header>
-        <main>
-            <div class="grid">
-                <section class="card" data-card="table">
-                    <h2>Per-Version Evolution <span>(Aggregates)</span>
-                        <button class="btn btn-expand" data-target="table">Expand</button>
-                    </h2>
-                    <div class="chart-area">
-                        {{ version_stats_table | safe }}
-                    </div>
-                </section>
-                <section class="card" data-card="box">
-                    <h2>
-                        <span>Service Distribution <span>(Box Plot)</span></span>
-                        <span class="card-actions">
-                            <label for="version" style="font-weight:600;color:#4a4f57;margin-right:0.5rem;">Version</label>
-                            <select id="version" name="version" style="margin-right:0.75rem;">
-                                {% for version in versions %}
-                                    <option value="{{ version }}" {% if version == selected_version %}selected{% endif %}>{{ version }}</option>
-                                {% endfor %}
-                            </select>
-                            <button class="btn btn-expand" data-target="box">Expand</button>
-                        </span>
-                    </h2>
-                    <div class="chart-area">
-                        <div id="boxPlot"></div>
-                        <p id="boxMessage" class="message" style="display:none;">No data available for selected version.</p>
-                    </div>
-                </section>
-                <section class="card" data-card="line">
-                    <h2>Average Loading Time Trend <span>(Line)</span>
-                        <button class="btn btn-expand" data-target="line">Expand</button>
-                    </h2>
-                    <div class="chart-area">
-                        {{ line_plot | safe }}
-                    </div>
-                </section>
-                <section class="card" data-card="bar">
-                    <h2>
-                        <span>Average Loading Time <span>(Grouped Bar)</span></span>
-                        <span class="card-actions">
-                            {% if datasets %}
-                            <label for="dataset" style="font-weight:600;color:#4a4f57;margin-right:0.5rem;">Dataset</label>
-                            <select id="dataset" name="dataset" style="margin-right:0.75rem;">
-                                {% for ds in datasets %}
-                                    <option value="{{ ds }}" {% if ds == selected_dataset %}selected{% endif %}>{{ ds }}</option>
-                                {% endfor %}
-                            </select>
-                            {% endif %}
-                            <button class="btn btn-expand" data-target="bar">Expand</button>
-                        </span>
-                    </h2>
-                    <div class="chart-area">
-                        {{ bar_plot | safe }}
-                    </div>
-                </section>
-            </div>
-        </main>
+        </div>
         <div class="overlay" id="overlay" style="display:none;">
             <div class="overlay-backdrop"></div>
             <div class="overlay-content">
@@ -888,247 +1117,501 @@ def analytics() -> str:
                 <div class="overlay-body" id="overlayBody"></div>
             </div>
         </div>
+
         <script>
-            const boxFigures = {{ box_figures | tojson }};
-            const versionsList = {{ versions | tojson }};
-            const lineFigure = {{ line_fig | tojson }};
-            let currentBarFigure = {{ bar_fig | tojson }};
-            const versionStatsHTML = {{ version_stats_table | tojson }};
-            const initialVersion = "{{ selected_version }}";
-            const barDataEndpoint = "{{ bar_data_endpoint }}";
-            const barAlerts = {{ bar_alerts | tojson }};
-            if (Array.isArray(barAlerts) && barAlerts.length) {
-                barAlerts.forEach((msg) => alert(msg));
-            }
+(() => {
+  const boxFigures = {{ box_figures | tojson }};
+  const versionsList = {{ versions | tojson }};
+  const lineFigure = {{ line_fig | tojson }};
+  let currentBarFigure = {{ bar_fig | tojson }};
+  const versionStatsHTML = {{ version_stats_table | tojson }};
+  const initialVersion = "{{ selected_version }}";
+  const barDataEndpoint = "{{ bar_data_endpoint }}";
+  const barAlerts = {{ bar_alerts | tojson }};
+  const csvApiEndpoint = "{{ csv_api_endpoint }}";
+  const initialView = "{{ active_view }}";
+  const initialDataset = "{{ selected_dataset }}";
+  const initialReport = "{{ initial_report }}";
+  const reportFiles = {{ report_files | tojson }};
 
-            const datasetSelect = document.getElementById("dataset");
-            const initialDataset = "{{ selected_dataset }}";
-            let currentBarDataset = initialDataset || (datasetSelect ? datasetSelect.value : "");
-            if (datasetSelect) {
-                datasetSelect.addEventListener("change", function (ev) {
-                    const dataset = ev.target.value;
-                    const url = new URL(window.location.href);
-                    if (dataset) {
-                        url.searchParams.set("dataset", dataset);
-                    } else {
-                        url.searchParams.delete("dataset");
-                    }
-                    url.searchParams.delete("version");
-                    window.location.href = url.toString();
-                });
-            }
+  const versionSelect = document.getElementById("version");
+  const datasetSelect = document.getElementById("dataset");
+  const sidebarButtons = Array.from(document.querySelectorAll(
+    ".sidebar-btn"
+  ));
+  const panels = {
+    analytics: document.getElementById("panel-analytics"),
+    reports: document.getElementById("panel-reports"),
+  };
+  const viewIndicator = document.getElementById("viewIndicator");
+  const reportList = document.getElementById("reportList");
+  const reportContent = document.getElementById("reportContent");
+  const reportTitle = document.getElementById("reportTitle");
+  const overlay = document.getElementById("overlay");
+  const overlayBody = document.getElementById("overlayBody");
+  const overlayTitle = document.getElementById("overlayTitle");
+  const overlayClose = document.getElementById("overlayClose");
+  const overlayBackdrop = overlay
+    ? overlay.querySelector(".overlay-backdrop")
+    : null;
 
-            function cloneFigure(fig) {
-                if (!fig) {
-                    return null;
-                }
-                return JSON.parse(JSON.stringify(fig));
-            }
+  let currentView = initialView === "reports" ? "reports" : "analytics";
+  let currentBarDataset = initialDataset ||
+    (datasetSelect ? datasetSelect.value : "");
+  let reportViewerLoaded = false;
+  let activeReportFile = initialReport || "";
+  let overlayVersionSelect = null;
+  let overlayBoxContainer = null;
+  let overlayDatasetSelect = null;
 
-            function applyLayoutTweaks(fig) {
-                if (!fig || !fig.layout) {
-                    return fig;
-                }
-                const layout = Object.assign({}, fig.layout);
-                layout.autosize = true;
-                layout.margin = Object.assign({l: 40, r: 20, t: 55, b: 50}, layout.margin || {});
-                return Object.assign({}, fig, { layout });
-            }
+  if (Array.isArray(barAlerts) && barAlerts.length) {
+    barAlerts.forEach((msg) => alert(msg));
+  }
 
-            function renderResponsivePlot(container, fig) {
-                if (!fig || !fig.data || fig.data.length === 0) {
-                    Plotly.purge(container);
-                    return false;
-                }
-                const plotFig = applyLayoutTweaks(cloneFigure(fig));
-                Plotly.newPlot(container, plotFig.data, plotFig.layout, {responsive: true, displaylogo: false});
-                setTimeout(() => Plotly.Plots.resize(container), 0);
-                return true;
-            }
+  function cloneFigure(fig) {
+    if (!fig) {
+      return null;
+    }
+    return JSON.parse(JSON.stringify(fig));
+  }
 
-            function renderBox(fig) {
-                const boxDiv = document.getElementById("boxPlot");
-                const message = document.getElementById("boxMessage");
-                if (!fig || !fig.data || fig.data.length === 0) {
-                    Plotly.purge(boxDiv);
-                    message.style.display = "block";
-                    return;
-                }
-                message.style.display = "none";
-                renderResponsivePlot(boxDiv, fig);
-            }
+  function applyLayoutTweaks(fig) {
+    if (!fig || !fig.layout) {
+      return fig;
+    }
+    const layout = Object.assign({}, fig.layout);
+    layout.autosize = true;
+    layout.margin = Object.assign(
+      { l: 40, r: 20, t: 55, b: 50 },
+      layout.margin || {}
+    );
+    return Object.assign({}, fig, { layout });
+  }
 
-            renderBox(cloneFigure(boxFigures[initialVersion]));
+  function renderResponsivePlot(container, fig) {
+    if (!container) {
+      return false;
+    }
+    if (!fig || !fig.data || !fig.data.length) {
+      Plotly.purge(container);
+      return false;
+    }
+    const plotFig = applyLayoutTweaks(cloneFigure(fig));
+    Plotly.newPlot(container, plotFig.data, plotFig.layout, {
+      responsive: true,
+      displaylogo: false,
+    });
+    setTimeout(() => Plotly.Plots.resize(container), 0);
+    return true;
+  }
 
-            const versionSelect = document.getElementById("version");
-            let overlayVersionSelect = null;
-            let overlayBoxContainer = null;
-            let overlayDatasetSelect = null;
+  function renderBoxFigure(version) {
+    const boxDiv = document.getElementById("boxPlot");
+    const message = document.getElementById("boxMessage");
+    const fig = cloneFigure(boxFigures[version] || null);
+    if (!boxDiv || !message) {
+      return;
+    }
+    if (!fig || !fig.data || !fig.data.length) {
+      Plotly.purge(boxDiv);
+      message.style.display = "block";
+      return;
+    }
+    message.style.display = "none";
+    renderResponsivePlot(boxDiv, fig);
+  }
 
-            versionSelect.addEventListener("change", function (ev) {
-                const version = ev.target.value;
-                const url = new URL(window.location.href);
-                url.searchParams.set("version", version);
-                window.history.replaceState(null, "", url);
-                renderBox(cloneFigure(boxFigures[version]));
-                if (overlayVersionSelect) {
-                    overlayVersionSelect.value = version;
-                }
-                if (overlayBoxContainer) {
-                    renderResponsivePlot(overlayBoxContainer, boxFigures[version]);
-                }
+  function setActiveReportButton(file) {
+    if (!reportList) {
+      return;
+    }
+    Array.from(reportList.querySelectorAll(".report-link")).forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.file === file);
+    });
+  }
+
+  function showReportMessage(message, type = "info") {
+    if (!reportContent) {
+      return;
+    }
+    const p = document.createElement("p");
+    p.className = type === "error" ? "message error" : "message";
+    p.textContent = message;
+    reportContent.innerHTML = "";
+    reportContent.appendChild(p);
+  }
+
+  function updateReportTitle(file) {
+    if (!reportTitle) {
+      return;
+    }
+    const datasetLabel = (datasetSelect && datasetSelect.value) ||
+      initialDataset ||
+      "default";
+    if (file) {
+      reportTitle.innerHTML = `Preview <small>${datasetLabel} ? ${file}</small>`;
+    } else if (datasetLabel) {
+      reportTitle.innerHTML = `Preview <small>${datasetLabel}</small>`;
+    } else {
+      reportTitle.textContent = "Preview";
+    }
+  }
+
+  function renderReportTable(headers, rows) {
+    if (!reportContent) {
+      return;
+    }
+    if (!headers || !headers.length) {
+      showReportMessage("No data available in this CSV.");
+      return;
+    }
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    headers.forEach((head) => {
+      const th = document.createElement("th");
+      th.textContent = head;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    if (rows && rows.length) {
+      rows.forEach((row) => {
+        const tr = document.createElement("tr");
+        row.forEach((cell) => {
+          const td = document.createElement("td");
+          td.textContent = cell;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    } else {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = headers.length;
+      td.textContent = "No data rows";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    reportContent.innerHTML = "";
+    reportContent.appendChild(table);
+  }
+
+  function loadReport(file) {
+    if (!file) {
+      showReportMessage("Select a CSV to preview.");
+      updateReportTitle("");
+      return;
+    }
+    setActiveReportButton(file);
+    activeReportFile = file;
+    showReportMessage("Loading report...");
+    const params = new URLSearchParams();
+    params.set("file", file);
+    const currentDataset = datasetSelect ? datasetSelect.value : initialDataset;
+    if (currentDataset) {
+      params.set("dataset", currentDataset);
+    }
+    fetch(`${csvApiEndpoint}?${params.toString()}`)
+      .then((resp) => {
+        if (!resp.ok) {
+          throw new Error("Failed to load CSV file");
+        }
+        return resp.json();
+      })
+      .then((payload) => {
+        reportViewerLoaded = true;
+        updateReportTitle(file);
+        renderReportTable(payload.headers || [], payload.rows || []);
+        const url = new URL(window.location.href);
+        url.searchParams.set("report", file);
+        url.searchParams.set("view", currentView);
+        window.history.replaceState(null, "", url);
+      })
+      .catch((err) => {
+        console.error(err);
+        reportViewerLoaded = false;
+        showReportMessage("Unable to load CSV content.", "error");
+      });
+  }
+
+  function updateView(view) {
+    const targetView = view === "reports" && panels.reports ? "reports" : "analytics";
+    currentView = targetView;
+    Object.entries(panels).forEach(([key, panel]) => {
+      if (panel) {
+        panel.classList.toggle("active", key === targetView);
+      }
+    });
+    sidebarButtons.forEach((btn) => {
+      const isActive = btn.dataset.view === targetView;
+      btn.classList.toggle("active", isActive);
+      btn.setAttribute("aria-current", isActive ? "page" : "false");
+    });
+    if (viewIndicator) {
+      viewIndicator.textContent =
+        targetView === "analytics" ? "Analytics Dashboard" : "CSV Reports";
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", targetView);
+    window.history.replaceState(null, "", url);
+
+    if (targetView === "reports") {
+      if (!reportViewerLoaded) {
+        if (activeReportFile) {
+          loadReport(activeReportFile);
+        } else if (initialReport) {
+          loadReport(initialReport);
+        } else if (reportFiles.length) {
+          loadReport(reportFiles[0]);
+        } else {
+          showReportMessage("No CSV files found for this dataset.");
+        }
+      }
+    }
+  }
+
+  sidebarButtons.forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      updateView(btn.dataset.view || "analytics");
+    });
+  });
+
+  if (reportList) {
+    reportList.addEventListener("click", (event) => {
+      const button = event.target.closest(".report-link");
+      if (!button) {
+        return;
+      }
+      event.preventDefault();
+      loadReport(button.dataset.file);
+    });
+  }
+
+  if (datasetSelect) {
+    datasetSelect.addEventListener("change", (ev) => {
+      const dataset = ev.target.value;
+      const url = new URL(window.location.href);
+      if (dataset) {
+        url.searchParams.set("dataset", dataset);
+      } else {
+        url.searchParams.delete("dataset");
+      }
+      url.searchParams.delete("version");
+      url.searchParams.delete("report");
+      url.searchParams.set("view", currentView);
+      window.location.href = url.toString();
+    });
+  }
+
+  if (versionSelect) {
+    versionSelect.addEventListener("change", (ev) => {
+      const version = ev.target.value;
+      const url = new URL(window.location.href);
+      url.searchParams.set("version", version);
+      url.searchParams.set("view", currentView);
+      window.history.replaceState(null, "", url);
+      renderBoxFigure(version);
+      if (overlayVersionSelect) {
+        overlayVersionSelect.value = version;
+      }
+      if (overlayBoxContainer) {
+        renderResponsivePlot(
+          overlayBoxContainer,
+          boxFigures[version] || { data: [], layout: {} }
+        );
+      }
+    });
+  }
+
+  function closeOverlay() {
+    if (!overlay) {
+      return;
+    }
+    overlay.style.display = "none";
+    overlayBody.innerHTML = "";
+    overlayVersionSelect = null;
+    overlayBoxContainer = null;
+    overlayDatasetSelect = null;
+  }
+
+  function openOverlay(target) {
+    if (!overlay) {
+      return;
+    }
+    overlayBody.innerHTML = "";
+    overlayVersionSelect = null;
+    overlayBoxContainer = null;
+    overlayDatasetSelect = null;
+
+    if (target === "table") {
+      overlayTitle.textContent = "Per-Version Evolution (Aggregates)";
+      const tableWrapper = document.createElement("div");
+      tableWrapper.innerHTML = versionStatsHTML;
+      overlayBody.appendChild(tableWrapper);
+    } else if (target === "box") {
+      overlayTitle.textContent = "Service Distribution (Box Plot)";
+      const controls = document.createElement("div");
+      controls.className = "overlay-controls";
+      const overlayLabel = document.createElement("label");
+      overlayLabel.setAttribute("for", "overlay-version");
+      overlayLabel.textContent = "Version";
+      const overlaySelect = document.createElement("select");
+      overlaySelect.id = "overlay-version";
+      versionsList.forEach((ver) => {
+        const opt = document.createElement("option");
+        opt.value = ver;
+        opt.textContent = ver;
+        overlaySelect.appendChild(opt);
+      });
+      if (versionSelect) {
+        overlaySelect.value = versionSelect.value;
+      }
+      controls.appendChild(overlayLabel);
+      controls.appendChild(overlaySelect);
+      overlayBody.appendChild(controls);
+      const boxContainer = document.createElement("div");
+      boxContainer.className = "plot-container";
+      overlayBody.appendChild(boxContainer);
+      const currentVersion = (versionSelect && versionSelect.value) || versionsList[0];
+      renderResponsivePlot(boxContainer, boxFigures[currentVersion]);
+      overlayVersionSelect = overlaySelect;
+      overlayBoxContainer = boxContainer;
+      overlaySelect.addEventListener("change", (ev) => {
+        const chosen = ev.target.value;
+        if (versionSelect && versionSelect.value !== chosen) {
+          versionSelect.value = chosen;
+          versionSelect.dispatchEvent(new Event("change"));
+        } else {
+          renderBoxFigure(chosen);
+          renderResponsivePlot(boxContainer, boxFigures[chosen]);
+        }
+      });
+    } else if (target === "line") {
+      overlayTitle.textContent = "Average Loading Time Trend (Line)";
+      const lineContainer = document.createElement("div");
+      lineContainer.className = "plot-container";
+      overlayBody.appendChild(lineContainer);
+      if (lineFigure && lineFigure.data) {
+        renderResponsivePlot(lineContainer, lineFigure);
+      }
+    } else if (target === "bar") {
+      overlayTitle.textContent = "Average Loading Time (Grouped Bar)";
+      let barContainer = document.createElement("div");
+      barContainer.className = "plot-container";
+      if (datasetSelect) {
+        const controls = document.createElement("div");
+        controls.className = "overlay-controls";
+        const dsLabel = document.createElement("label");
+        dsLabel.setAttribute("for", "overlay-dataset");
+        dsLabel.textContent = "Dataset";
+        const dsSelect = datasetSelect.cloneNode(true);
+        dsSelect.id = "overlay-dataset";
+        dsSelect.value = currentBarDataset || (datasetSelect ? datasetSelect.value : dsSelect.value);
+        controls.appendChild(dsLabel);
+        controls.appendChild(dsSelect);
+        overlayBody.appendChild(controls);
+        overlayDatasetSelect = dsSelect;
+        dsSelect.addEventListener("change", (ev) => {
+          const chosen = ev.target.value;
+          const params = new URLSearchParams();
+          if (chosen) {
+            params.set("dataset", chosen);
+          }
+          fetch(`${barDataEndpoint}?${params.toString()}`)
+            .then((resp) => {
+              if (!resp.ok) {
+                throw new Error("Failed to fetch dataset bar data");
+              }
+              return resp.json();
+            })
+            .then((payload) => {
+              if (Array.isArray(payload.warnings)) {
+                payload.warnings.forEach((msg) => alert(msg));
+              }
+              if (payload.error) {
+                alert(payload.error);
+              }
+              currentBarDataset = payload.dataset || chosen || "";
+              if (dsSelect.value !== currentBarDataset) {
+                dsSelect.value = currentBarDataset;
+              }
+              currentBarFigure = payload.figure || { data: [], layout: {} };
+              if (!payload.error && currentBarFigure.data && currentBarFigure.data.length) {
+                renderResponsivePlot(barContainer, currentBarFigure);
+              } else {
+                Plotly.purge(barContainer);
+              }
+            })
+            .catch((err) => {
+              console.error(err);
             });
+        });
+      }
+      overlayBody.appendChild(barContainer);
+      if (currentBarFigure && currentBarFigure.data) {
+        renderResponsivePlot(barContainer, currentBarFigure);
+      }
+    }
 
-            const overlay = document.getElementById("overlay");
-            const overlayBody = document.getElementById("overlayBody");
-            const overlayTitle = document.getElementById("overlayTitle");
-            const overlayClose = document.getElementById("overlayClose");
+    overlay.style.display = "flex";
+  }
 
-            function openOverlay(target) {
-                overlayBody.innerHTML = "";
-                overlayVersionSelect = null;
-                overlayBoxContainer = null;
-                if (target === "table") {
-                    overlayTitle.textContent = "Per-Version Evolution (Aggregates)";
-                    const tableWrapper = document.createElement("div");
-                    tableWrapper.innerHTML = versionStatsHTML;
-                    overlayBody.appendChild(tableWrapper);
-                } else if (target === "box") {
-                    overlayTitle.textContent = "Service Distribution (Box Plot)";
-                    const controls = document.createElement("div");
-                    controls.className = "overlay-controls";
-                    const overlayLabel = document.createElement("label");
-                    overlayLabel.setAttribute("for", "overlay-version");
-                    overlayLabel.textContent = "Version";
-                    const overlaySelect = document.createElement("select");
-                    overlaySelect.id = "overlay-version";
-                    versionsList.forEach((ver) => {
-                        const opt = document.createElement("option");
-                        opt.value = ver;
-                        opt.textContent = ver;
-                        overlaySelect.appendChild(opt);
-                    });
-                    const mainSelect = document.getElementById("version");
-                    if (mainSelect) {
-                        overlaySelect.value = mainSelect.value;
-                    }
-                    controls.appendChild(overlayLabel);
-                    controls.appendChild(overlaySelect);
-                    overlayBody.appendChild(controls);
+  Array.from(document.querySelectorAll(".btn-expand")).forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const target = btn.getAttribute("data-target");
+      openOverlay(target || "table");
+    });
+  });
 
-                    const boxContainer = document.createElement("div");
-                    boxContainer.className = "plot-container";
-                    overlayBody.appendChild(boxContainer);
-                    const currentVersion = document.getElementById("version").value;
-                    const fig = cloneFigure(boxFigures[currentVersion]);
-                    renderResponsivePlot(boxContainer, fig);
+  if (overlayClose) {
+    overlayClose.addEventListener("click", () => closeOverlay());
+  }
+  if (overlayBackdrop) {
+    overlayBackdrop.addEventListener("click", () => closeOverlay());
+  }
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      closeOverlay();
+    }
+  });
 
-                    overlayVersionSelect = overlaySelect;
-                    overlayBoxContainer = boxContainer;
+  const initialBoxVersion = (initialVersion && boxFigures[initialVersion])
+    ? initialVersion
+    : (versionsList[0] || null);
+  if (initialBoxVersion) {
+    if (versionSelect && versionSelect.value !== initialBoxVersion) {
+      versionSelect.value = initialBoxVersion;
+    }
+    renderBoxFigure(initialBoxVersion);
+  }
 
-                    overlaySelect.addEventListener("change", (ev) => {
-                        const chosen = ev.target.value;
-                        if (mainSelect && mainSelect.value !== chosen) {
-                            mainSelect.value = chosen;
-                            mainSelect.dispatchEvent(new Event("change"));
-                        } else {
-                            renderBox(cloneFigure(boxFigures[chosen]));
-                            renderResponsivePlot(boxContainer, boxFigures[chosen]);
-                        }
-                    });
-                } else if (target === "line") {
-                    overlayTitle.textContent = "Average Loading Time Trend (Line)";
-                    const lineContainer = document.createElement("div");
-                    lineContainer.className = "plot-container";
-                    overlayBody.appendChild(lineContainer);
-                    if (lineFigure && lineFigure.data) {
-                        renderResponsivePlot(lineContainer, lineFigure);
-                    }
-                } else if (target === "bar") {
-                    overlayTitle.textContent = "Average Loading Time (Grouped Bar)";
-                    if (datasetSelect) {
-                        const controls = document.createElement("div");
-                        controls.className = "overlay-controls";
-                        const dsLabel = document.createElement("label");
-                        dsLabel.setAttribute("for", "overlay-dataset");
-                        dsLabel.textContent = "Dataset";
-                        const dsSelect = datasetSelect.cloneNode(true);
-                        dsSelect.id = "overlay-dataset";
-                        dsSelect.value = currentBarDataset || (datasetSelect ? datasetSelect.value : dsSelect.value);
-                        controls.appendChild(dsLabel);
-                        controls.appendChild(dsSelect);
-                        overlayBody.appendChild(controls);
-                        overlayDatasetSelect = dsSelect;
-                        dsSelect.addEventListener("change", (ev) => {
-                            const chosen = ev.target.value;
-                            const params = new URLSearchParams();
-                            if (chosen) {
-                                params.set("dataset", chosen);
-                            }
-                            fetch(`${barDataEndpoint}?${params.toString()}`)
-                                .then((resp) => {
-                                    if (!resp.ok) {
-                                        throw new Error("Failed to fetch dataset bar data");
-                                    }
-                                    return resp.json();
-                                })
-                                .then((payload) => {
-                                    if (Array.isArray(payload.warnings)) {
-                                        payload.warnings.forEach((msg) => alert(msg));
-                                    }
-                                    if (payload.error) {
-                                        alert(payload.error);
-                                    }
-                                    currentBarDataset = payload.dataset || chosen || "";
-                                    if (dsSelect.value !== currentBarDataset) {
-                                        dsSelect.value = currentBarDataset;
-                                    }
-                                    currentBarFigure = payload.figure || { data: [], layout: {} };
-                                    if (!payload.error && currentBarFigure.data && currentBarFigure.data.length) {
-                                        renderResponsivePlot(barContainer, currentBarFigure);
-                                    } else {
-                                        Plotly.purge(barContainer);
-                                    }
-                                })
-                                .catch((err) => {
-                                    console.error(err);
-                                });
-                        });
-                    }
-                    const barContainer = document.createElement("div");
-                    barContainer.className = "plot-container";
-                    overlayBody.appendChild(barContainer);
-                    if (currentBarFigure && currentBarFigure.data) {
-                        renderResponsivePlot(barContainer, currentBarFigure);
-                    }
-                }
-                overlay.style.display = "flex";
-            }
+  updateReportTitle(activeReportFile);
+  updateView(currentView);
 
-            function closeOverlay() {
-                overlay.style.display = "none";
-                overlayBody.innerHTML = "";
-                overlayVersionSelect = null;
-                overlayBoxContainer = null;
-                overlayDatasetSelect = null;
-            }
-
-            document.querySelectorAll(".btn-expand").forEach((btn) => {
-                btn.addEventListener("click", (ev) => {
-                    const target = ev.currentTarget.getAttribute("data-target");
-                    openOverlay(target);
-                });
-            });
-
-            overlayClose.addEventListener("click", closeOverlay);
-            overlay.querySelector(".overlay-backdrop").addEventListener("click", closeOverlay);
+  if (reportList && activeReportFile) {
+    setActiveReportButton(activeReportFile);
+  }
+  if (currentView === "reports" && (activeReportFile || reportFiles.length)) {
+    loadReport(activeReportFile || reportFiles[0]);
+  } else if (currentView === "reports") {
+    showReportMessage("No CSV files found for this dataset.");
+  }
+})();
         </script>
     </body>
     </html>
     """
 
+    csv_api_endpoint = url_for("api_csv")
+
     return render_template_string(
         template,
+        active_view=view_mode,
         datasets=dataset_options,
         selected_dataset=selected_dataset,
         version_stats_table=version_stats_html,
@@ -1141,7 +1624,17 @@ def analytics() -> str:
         box_figures=box_figures,
         bar_data_endpoint=url_for("analytics_bardata"),
         bar_alerts=bar_alerts,
+        report_files=report_files,
+        initial_report=initial_report,
+        csv_api_endpoint=csv_api_endpoint,
     )
+
+
+@app.route("/analytics")
+def analytics():
+    params = request.args.to_dict(flat=True)
+    params["view"] = "analytics"
+    return redirect(url_for("index", **params))
 
 
 @app.route("/analytics/bardata")
