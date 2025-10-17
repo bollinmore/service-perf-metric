@@ -631,6 +631,8 @@ def _render_dashboard_page(active_view: str) -> str:
             body {
                 margin: 0;
                 background: #f7f8fa;
+                height: 100vh;
+                overflow: hidden;
             }
             a {
                 color: #1a73e8;
@@ -652,6 +654,11 @@ def _render_dashboard_page(active_view: str) -> str:
                 padding: 1rem 0;
                 gap: 1rem;
                 box-shadow: inset -1px 0 0 rgba(15, 23, 42, 0.4);
+                position: sticky;
+                top: 0;
+                align-self: flex-start;
+                flex-shrink: 0;
+                min-height: 100vh;
             }
             .sidebar-btn {
                 width: 100%;
@@ -684,6 +691,8 @@ def _render_dashboard_page(active_view: str) -> str:
                 display: flex;
                 flex-direction: column;
                 min-height: 100vh;
+                height: 100vh;
+                overflow: hidden;
             }
             header {
                 position: sticky;
@@ -1058,6 +1067,10 @@ def _render_dashboard_page(active_view: str) -> str:
             }
 
             @media (max-width: 1100px) {
+                body {
+                    height: auto;
+                    overflow: auto;
+                }
                 .app {
                     flex-direction: column;
                 }
@@ -1066,6 +1079,9 @@ def _render_dashboard_page(active_view: str) -> str:
                     flex-direction: row;
                     justify-content: center;
                     box-shadow: inset 0 -1px 0 rgba(15, 23, 42, 0.1);
+                    position: static;
+                    min-height: auto;
+                    height: auto;
                 }
                 .sidebar-btn {
                     flex-direction: row;
@@ -1074,6 +1090,8 @@ def _render_dashboard_page(active_view: str) -> str:
                 }
                 .main-shell {
                     min-height: auto;
+                    height: auto;
+                    overflow: visible;
                 }
                 header {
                     flex-direction: column;
