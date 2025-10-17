@@ -844,9 +844,9 @@ def _render_dashboard_page(active_view: str) -> str:
            }
             .reports-layout {
                 display: grid;
-                grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+                grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
                 gap: 1.5rem;
-                align-items: stretch;
+                align-items: flex-start;
             }
             .reports-list,
             .reports-viewer {
@@ -859,7 +859,11 @@ def _render_dashboard_page(active_view: str) -> str:
                 padding: 1rem;
                 display: flex;
                 flex-direction: column;
-                max-height: calc(100vh - 220px);
+                position: sticky;
+                top: 0;
+                align-self: flex-start;
+                max-height: calc(100vh - 1rem);
+                overflow: hidden;
             }
             .reports-list h2 {
                 margin: 0 0 0.75rem;
@@ -871,6 +875,7 @@ def _render_dashboard_page(active_view: str) -> str:
                 padding: 0;
                 margin: 0;
                 overflow-y: auto;
+                flex: 1;
             }
             .reports-list li {
                 margin-bottom: 0.4rem;
@@ -1107,7 +1112,10 @@ def _render_dashboard_page(active_view: str) -> str:
                     grid-template-columns: 1fr;
                 }
                 .reports-list {
+                    position: static;
+                    height: auto;
                     max-height: none;
+                    overflow: visible;
                 }
                 .overlay-content {
                     width: 98vw;
@@ -1397,6 +1405,7 @@ def _render_dashboard_page(active_view: str) -> str:
     p.textContent = message;
     reportContent.innerHTML = "";
     reportContent.appendChild(p);
+    reportContent.scrollTop = 0;
   }
 
   function updateReportTitle(file) {
@@ -1587,6 +1596,9 @@ def _render_dashboard_page(active_view: str) -> str:
       .then((payload) => {
         reportViewerLoaded = true;
         updateReportTitle(file);
+        if (reportContent) {
+          reportContent.scrollTop = 0;
+        }
         renderReportTable(payload.headers || [], payload.rows || []);
         const url = new URL(window.location.href);
         url.searchParams.set("report", file);
