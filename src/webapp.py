@@ -513,6 +513,9 @@ def _render_dashboard_page(active_view: str) -> str:
 
     compare_version_a = request.args.get("compareA")
     compare_version_b = request.args.get("compareB")
+    compare_filter = request.args.get("filter", "all")
+    if compare_filter not in {"positive", "negative"}:
+        compare_filter = "all"
     if compare_version_a not in version_cols:
         compare_version_a = version_cols[0] if version_cols else ""
     if compare_version_b not in version_cols:
@@ -926,12 +929,16 @@ def _render_dashboard_page(active_view: str) -> str:
                 flex-direction: column;
                 gap: 1rem;
             }
-            .compare-header {
+            .compare-header-row {
                 display: flex;
-                flex-direction: column;
-                gap: 0.75rem;
+                align-items: center;
+                justify-content: space-between;
+                gap: 1rem;
             }
-            .compare-header h2 {
+            .compare-header-text {
+                flex: 1;
+            }
+            .compare-header-text h2 {
                 margin: 0;
                 font-size: 1.1rem;
                 font-weight: 600;
@@ -1117,6 +1124,14 @@ def _render_dashboard_page(active_view: str) -> str:
                     max-height: none;
                     overflow: visible;
                 }
+                .compare-header-row {
+                    flex-direction: column;
+                    align-items: flex-start;
+                    gap: 0.75rem;
+                }
+                .compare-controls {
+                    width: 100%;
+                }
                 .overlay-content {
                     width: 98vw;
                     height: 94vh;
@@ -1231,8 +1246,10 @@ def _render_dashboard_page(active_view: str) -> str:
                     </section>
                     <section id="panel-compare" class="panel{% if active_view == 'compare' %} active{% endif %}">
                         <div class="compare-card">
-                            <div class="compare-header">
-                                <h2>Version Comparison</h2>
+                            <div class="compare-header-row">
+                                <div class="compare-header-text">
+                                    <h2>Version Comparison</h2>
+                                </div>
                                 {% if versions %}
                                 <div class="compare-controls">
                                     <label for="compareVersionA">Version A</label>
@@ -1246,6 +1263,12 @@ def _render_dashboard_page(active_view: str) -> str:
                                         {% for ver in versions %}
                                             <option value="{{ ver }}" {% if ver == compare_default_b %}selected{% endif %}>{{ ver }}</option>
                                         {% endfor %}
+                                    </select>
+                                    <label for="compareFilter">Change</label>
+                                    <select id="compareFilter" name="filter">
+                                        <option value="all" {% if compare_default_filter == 'all' %}selected{% endif %}>All</option>
+                                        <option value="positive" {% if compare_default_filter == 'positive' %}selected{% endif %}>Positive</option>
+                                        <option value="negative" {% if compare_default_filter == 'negative' %}selected{% endif %}>Negative</option>
                                     </select>
                                 </div>
                                 {% endif %}
@@ -1303,6 +1326,7 @@ def _render_dashboard_page(active_view: str) -> str:
   const compareServices = {{ compare_services | tojson }};
   const compareDefaultA = "{{ compare_default_a }}";
   const compareDefaultB = "{{ compare_default_b }}";
+  const compareDefaultFilter = "{{ compare_default_filter }}";
 
   const versionSelect = document.getElementById("version");
   const datasetSelect = document.getElementById("dataset");
@@ -1324,6 +1348,7 @@ def _render_dashboard_page(active_view: str) -> str:
   const comparePanel = document.getElementById("panel-compare");
   const compareVersionASelect = document.getElementById("compareVersionA");
   const compareVersionBSelect = document.getElementById("compareVersionB");
+  const compareFilterSelect = document.getElementById("compareFilter");
   const compareTableBody = document.getElementById("compareTableBody");
   const compareColA = document.getElementById("compareColA");
   const compareColB = document.getElementById("compareColB");
@@ -1414,7 +1439,7 @@ def _render_dashboard_page(active_view: str) -> str:
     }
     const datasetLabel = (datasetSelect && datasetSelect.value) || initialDataset || "default";
     if (file) {
-      reportTitle.innerHTML = `Preview <small>${datasetLabel} ? ${file}</small>`;
+      reportTitle.innerHTML = `Preview <small>${datasetLabel} · ${file}</small>`;
     } else if (datasetLabel) {
       reportTitle.innerHTML = `Preview <small>${datasetLabel}</small>`;
     } else {
@@ -1462,6 +1487,7 @@ def _render_dashboard_page(active_view: str) -> str:
     table.appendChild(tbody);
     reportContent.innerHTML = "";
     reportContent.appendChild(table);
+    reportContent.scrollTop = 0;
   }
 
   function getCompareValue(service, version) {
@@ -1507,6 +1533,10 @@ def _render_dashboard_page(active_view: str) -> str:
     }
     const versionA = compareVersionASelect ? compareVersionASelect.value : compareDefaultA;
     const versionB = compareVersionBSelect ? compareVersionBSelect.value : compareDefaultB;
+    const filterValue = ((compareFilterSelect && compareFilterSelect.value) || compareDefaultFilter || "all");
+    if (compareFilterSelect && compareFilterSelect.value !== filterValue) {
+      compareFilterSelect.value = filterValue;
+    }
     if (compareColA) {
       compareColA.textContent = versionA ? `${versionA} (avg ms)` : "Version A";
     }
@@ -1515,6 +1545,7 @@ def _render_dashboard_page(active_view: str) -> str:
     }
 
     compareTableBody.innerHTML = "";
+    let rowsRendered = 0;
     if (!compareServices.length || !versionA || !versionB) {
       const row = document.createElement("tr");
       const cell = document.createElement("td");
@@ -1527,13 +1558,21 @@ def _render_dashboard_page(active_view: str) -> str:
     }
 
     compareServices.forEach((service) => {
+      const valueA = getCompareValue(service, versionA);
+      const valueB = getCompareValue(service, versionB);
+      const diff = formatDiff(valueA, valueB);
+      const diffClass = diff.cls || "diff-neutral";
+      if (filterValue === "positive" && diffClass !== "diff-positive") {
+        return;
+      }
+      if (filterValue === "negative" && diffClass !== "diff-negative") {
+        return;
+      }
+
       const row = document.createElement("tr");
       const cellService = document.createElement("td");
       cellService.textContent = service;
       row.appendChild(cellService);
-
-      const valueA = getCompareValue(service, versionA);
-      const valueB = getCompareValue(service, versionB);
 
       const cellA = document.createElement("td");
       cellA.className = "value";
@@ -1547,13 +1586,23 @@ def _render_dashboard_page(active_view: str) -> str:
 
       const diffCell = document.createElement("td");
       diffCell.classList.add("value");
-      const diff = formatDiff(valueA, valueB);
       diffCell.textContent = diff.text;
-      diffCell.classList.add(diff.cls || "diff-neutral");
+      diffCell.classList.add(diffClass);
       row.appendChild(diffCell);
 
       compareTableBody.appendChild(row);
+      rowsRendered += 1;
     });
+
+    if (!rowsRendered) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.textContent = "No comparison data available.";
+      cell.colSpan = 4;
+      cell.className = "message";
+      row.appendChild(cell);
+      compareTableBody.appendChild(row);
+    }
 
     if (currentView === "compare") {
       const url = new URL(window.location.href);
@@ -1566,6 +1615,11 @@ def _render_dashboard_page(active_view: str) -> str:
         url.searchParams.set("compareB", versionB);
       } else {
         url.searchParams.delete("compareB");
+      }
+      if (filterValue && filterValue !== "all") {
+        url.searchParams.set("filter", filterValue);
+      } else {
+        url.searchParams.delete("filter");
       }
       window.history.replaceState(null, "", url);
     }
@@ -1596,9 +1650,6 @@ def _render_dashboard_page(active_view: str) -> str:
       .then((payload) => {
         reportViewerLoaded = true;
         updateReportTitle(file);
-        if (reportContent) {
-          reportContent.scrollTop = 0;
-        }
         renderReportTable(payload.headers || [], payload.rows || []);
         const url = new URL(window.location.href);
         url.searchParams.set("report", file);
@@ -1840,6 +1891,7 @@ def _render_dashboard_page(active_view: str) -> str:
       url.searchParams.delete("report");
       url.searchParams.delete("compareA");
       url.searchParams.delete("compareB");
+      url.searchParams.delete("filter");
       url.searchParams.set("view", currentView);
       window.location.href = url.toString();
     });
@@ -1875,6 +1927,11 @@ def _render_dashboard_page(active_view: str) -> str:
       updateCompareTable();
     });
   }
+  if (compareFilterSelect) {
+    compareFilterSelect.addEventListener("change", () => {
+      updateCompareTable();
+    });
+  }
 
   sidebarButtons.forEach((btn) => {
     btn.addEventListener("click", (event) => {
@@ -1891,6 +1948,9 @@ def _render_dashboard_page(active_view: str) -> str:
   }
   if (compareVersionBSelect && compareDefaultB) {
     compareVersionBSelect.value = compareDefaultB;
+  }
+  if (compareFilterSelect) {
+    compareFilterSelect.value = compareDefaultFilter || "all";
   }
   if (initialBoxVersion) {
     if (versionSelect && versionSelect.value !== initialBoxVersion) {
@@ -1943,6 +2003,7 @@ def _render_dashboard_page(active_view: str) -> str:
         compare_data=compare_data,
         compare_default_a=compare_version_a,
         compare_default_b=compare_version_b,
+        compare_default_filter=compare_filter,
     )
 
 
