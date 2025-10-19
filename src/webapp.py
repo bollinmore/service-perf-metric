@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import csv
@@ -9,11 +9,26 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.io import to_html
-from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file, url_for
+from flask import (
+    Flask,
+    abort,
+    jsonify,
+    redirect,
+    render_template,
+    render_template_string,
+    request,
+    send_file,
+    url_for,
+)
 
 
-app = Flask(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+app = Flask(
+    __name__,
+    template_folder=str(PROJECT_ROOT / "templates"),
+    static_folder=str(PROJECT_ROOT / "static"),
+)
 
 EXCLUDED_SERVICES = {
     "EIP2",
@@ -123,7 +138,263 @@ def _read_csv_rows(target: Path) -> List[List[str]]:
 @app.route("/")
 def index() -> str:
     view_param = request.args.get("view", "analytics")
-    return _render_dashboard_page(view_param)
+    dataset_param = request.args.get("dataset")
+    dataset_options = _available_datasets()
+
+    active_dataset = dataset_param or DEFAULT_DATASET_NAME
+    if active_dataset:
+        try:
+            _result_dir_for_dataset(active_dataset)
+        except (ValueError, FileNotFoundError):
+            active_dataset = None
+    if not active_dataset and dataset_options:
+        active_dataset = dataset_options[0]
+
+    minimal_state = {
+        "view": view_param,
+        "selectedDataset": active_dataset or "",
+        "datasetOptions": dataset_options,
+        "endpoints": {
+            "csv": url_for("api_csv"),
+            "download": url_for("download_csv"),
+            "dashboard": url_for("api_dashboard"),
+            "analyticsBar": url_for("analytics_bardata"),
+        },
+    }
+
+    return render_template("index.html", initial_state=minimal_state)
+
+
+@app.get("/api/dashboard")
+def api_dashboard():
+    view_param = request.args.get("view", "analytics")
+    try:
+        state = _build_dashboard_state(view_param, request.args.to_dict(flat=True))
+    except ValueError as exc:
+        abort(400, str(exc))
+    except FileNotFoundError as exc:
+        abort(404, str(exc))
+    return jsonify(state)
+
+
+def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
+    summary_path = result_dir / "summary.csv"
+    if not summary_path.exists():
+        raise FileNotFoundError("summary.csv not found. Generate it with extract.py --combine")
+
+    df = pd.read_csv(summary_path)
+    if "service" not in df.columns:
+        raise ValueError("summary.csv must contain a 'service' column")
+
+    df["service"] = df["service"].astype(str)
+    df = df[~df["service"].isin(EXCLUDED_SERVICES)]
+
+    numeric_cols = [c for c in df.columns if c != "service"]
+    if not numeric_cols:
+        raise ValueError("summary.csv must contain at least one version column")
+
+    df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
+    return df, numeric_cols
+
+
+def _prepare_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str], pd.DataFrame, List[str]]:
+    df, version_cols = _load_summary(result_dir)
+
+    melted = df.melt(
+        id_vars="service",
+        value_vars=version_cols,
+        var_name="version",
+        value_name="loading_time",
+    ).dropna(subset=["loading_time"])
+
+    if melted.empty:
+        raise ValueError("summary.csv does not contain numeric data")
+
+    service_order = (
+        df["service"]
+        .dropna()
+        .drop_duplicates()
+        .sort_values(key=lambda col: col.str.casefold())
+        .tolist()
+    )
+    return df, version_cols, melted, service_order
+
+
+def _load_service_stats(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
+    stats_path = result_dir / "service_stats.csv"
+    if not stats_path.exists():
+        raise FileNotFoundError("service_stats.csv not found. Generate it with report.py")
+
+    stats_df = pd.read_csv(stats_path)
+    if "service" not in stats_df.columns:
+        raise ValueError("service_stats.csv must contain a 'service' column")
+
+    version_set = set()
+    for col in stats_df.columns:
+        if col == "service" or "_" not in col:
+            continue
+        version, metric = col.rsplit("_", 1)
+        if metric in {"avg", "min", "max", "median"}:
+            version_set.add(version)
+
+    versions = sorted(version_set)
+    stats_df = stats_df.set_index("service")
+    stats_df.index = stats_df.index.astype(str)
+    stats_df = stats_df[~stats_df.index.isin(EXCLUDED_SERVICES)]
+    return stats_df, versions
+
+
+def _build_bar_figure_from_wide(wide: pd.DataFrame, version_cols: List[str]) -> go.Figure:
+    fig = go.Figure()
+    y_max = 0.0
+    x_labels = wide.index.tolist()
+    for version in version_cols:
+        if version not in wide.columns:
+            continue
+        column = wide[version]
+        if column.isna().all():
+            continue
+        values = column.tolist()
+        fig.add_trace(
+            go.Bar(
+                x=x_labels,
+                y=values,
+                name=version,
+                text=[f"{v:.0f}" if pd.notna(v) else "" for v in values],
+                textposition="outside",
+            )
+        )
+        current_max = max([v for v in values if pd.notna(v)] or [0])
+        y_max = max(y_max, current_max)
+
+    if not fig.data:
+        return fig
+
+    y_buffer = y_max * 0.1 if y_max else 0
+    fig.update_yaxes(range=[0, y_max + y_buffer])
+    fig.update_layout(
+        title="Average Loading Time per Service (Grouped Bar)",
+        xaxis_title="Service",
+        yaxis_title="Average Loading Time (ms)",
+        margin=dict(l=30, r=20, t=60, b=80),
+        barmode="group",
+        legend_title="Version",
+    )
+    return fig
+
+
+def _validate_dataset_requirements(melted: pd.DataFrame) -> Tuple[List[str], str | None]:
+    warnings: List[str] = []
+    error: str | None = None
+
+    if melted.empty:
+        return warnings, error
+
+    cleaned = melted.copy()
+    cleaned["service"] = cleaned["service"].astype(str).str.strip()
+
+    unique_services = sorted(cleaned["service"].dropna().unique())
+    service_count = len(unique_services)
+    if service_count != 24:
+        warnings.append(f"Warning: dataset must include 24 services, found {service_count}.")
+
+    service_counts = cleaned.groupby("service")["loading_time"].count()
+
+    auto_service = None
+    for service_name in service_counts.index:
+        if service_name.upper() == "AUTO TEST":
+            auto_service = service_name
+            break
+
+    if auto_service is None:
+        error = "Error: dataset is missing required 'AUTO TEST' service."
+        return warnings, error
+
+    baseline = int(service_counts.get(auto_service, 0))
+    mismatched: List[str] = []
+    for service_name, count in service_counts.items():
+        count = int(count)
+        if service_name == auto_service:
+            continue
+        if count != baseline:
+            mismatched.append(f"{service_name} ({count} samples)")
+
+    if mismatched:
+        mismatch_list = ", ".join(mismatched)
+        warnings.append(
+            f"Warning: sample counts differ from AUTO TEST ({baseline} samples): {mismatch_list}."
+        )
+
+    return warnings, error
+
+
+    return warnings, error
+
+
+def _build_box_from_stats(
+    stats_df: pd.DataFrame,
+    version: str,
+    service_order: List[str],
+) -> go.Figure | None:
+    required_cols = [f"{version}_" + metric for metric in ("min", "median", "avg", "max")]
+    if not all(col in stats_df.columns for col in required_cols):
+        return None
+
+    fig = go.Figure()
+    targets = service_order if service_order else stats_df.index.tolist()
+    if not service_order:
+        targets = sorted(stats_df.index.tolist(), key=lambda s: str(s).casefold())
+    for service in targets:
+        if service not in stats_df.index:
+            continue
+        row = stats_df.loc[service]
+        values = [row.get(col) for col in required_cols]
+        cleaned = [float(v) for v in values if pd.notna(v)]
+        if not cleaned:
+            continue
+        stats_tuple = (
+            row.get(required_cols[0]),
+            row.get(required_cols[1]),
+            row.get(required_cols[2]),
+            row.get(required_cols[3]),
+        )
+        customdata = [
+            [
+                stats_tuple[0],
+                stats_tuple[1],
+                stats_tuple[2],
+                stats_tuple[3],
+            ]
+        ] * len(cleaned)
+        fig.add_trace(
+            go.Box(
+                y=cleaned,
+                name=service,
+                boxpoints=False,
+                boxmean=True,
+                customdata=customdata,
+                hovertemplate=(
+                    "Service: %{x}<br>"
+                    "Min: %{customdata[0]:.0f} ms<br>"
+                    "Median: %{customdata[1]:.0f} ms<br>"
+                    "Average: %{customdata[2]:.0f} ms<br>"
+                    "Max: %{customdata[3]:.0f} ms"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    if not fig.data:
+        return None
+
+    fig.update_layout(
+        title=f"Service Loading Time Distribution ({version})",
+        yaxis_title="Loading Time (ms)",
+        xaxis_title="Service",
+        margin=dict(l=30, r=20, t=60, b=80),
+        showlegend=False,
+    )
+    return fig
 
 
 @app.route("/view")
@@ -468,24 +739,19 @@ def _build_box_from_stats(
     return fig
 
 
-def _render_dashboard_page(active_view: str) -> str:
+def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Dict[str, object]:
     view_mode = active_view if active_view in {"analytics", "reports", "compare"} else "analytics"
-    dataset_param = request.args.get("dataset")
+    dataset_param = query_params.get("dataset")
     dataset_options = _available_datasets()
     active_dataset = dataset_param or DEFAULT_DATASET_NAME
     if not active_dataset and dataset_options:
         active_dataset = dataset_options[0]
 
-    try:
-        active_result_dir = _result_dir_for_dataset(active_dataset)
-    except ValueError as exc:
-        abort(400, str(exc))
-    except FileNotFoundError as exc:
-        abort(404, str(exc))
+    active_result_dir = _result_dir_for_dataset(active_dataset)
 
     report_paths = _list_csv_files_under(active_result_dir)
     report_files = [p.relative_to(active_result_dir).as_posix() for p in report_paths]
-    selected_report_param = request.args.get("report")
+    selected_report_param = query_params.get("report")
     initial_report = (
         selected_report_param
         if selected_report_param and selected_report_param in report_files
@@ -497,11 +763,8 @@ def _render_dashboard_page(active_view: str) -> str:
 
     selected_dataset = active_dataset or ""
 
-    try:
-        df, version_cols, melted, service_order = _prepare_summary(active_result_dir)
-        stats_df, stats_versions = _load_service_stats(active_result_dir)
-    except (FileNotFoundError, ValueError) as exc:
-        abort(404, str(exc))
+    df, version_cols, melted, service_order = _prepare_summary(active_result_dir)
+    stats_df, stats_versions = _load_service_stats(active_result_dir)
 
     available_box_versions = [v for v in version_cols if v in stats_versions]
     dropdown_versions = available_box_versions if available_box_versions else version_cols
@@ -511,39 +774,47 @@ def _render_dashboard_page(active_view: str) -> str:
     if dataset_error:
         bar_alerts.append(dataset_error)
 
-    compare_version_a = request.args.get("compareA")
-    compare_version_b = request.args.get("compareB")
-    compare_filter = request.args.get("filter", "all")
+    compare_version_a = query_params.get("compareA")
+    compare_version_b = query_params.get("compareB")
+    compare_filter = query_params.get("filter", "all")
     if compare_filter not in {"positive", "negative"}:
         compare_filter = "all"
     if compare_version_a not in version_cols:
         compare_version_a = version_cols[0] if version_cols else ""
     if compare_version_b not in version_cols:
-        compare_version_b = (
-            version_cols[1] if len(version_cols) > 1 else compare_version_a
-        )
+        compare_version_b = version_cols[1] if len(version_cols) > 1 else compare_version_a
 
-    selected_version = request.args.get("version")
+    selected_version = query_params.get("version")
     if not selected_version or selected_version not in dropdown_versions:
-        selected_version = dropdown_versions[0]
+        selected_version = dropdown_versions[0] if dropdown_versions else ""
 
-    # Per-version evolution table using pandas
-    version_stats_df = pd.DataFrame({
-        "Average": df[version_cols].mean(skipna=True),
-        "Max": df[version_cols].max(skipna=True),
-        "Min": df[version_cols].min(skipna=True),
-        "Median": df[version_cols].median(skipna=True),
-    })
-    version_stats_df = version_stats_df[["Average", "Max", "Min", "Median"]]
-    version_stats_html = version_stats_df.T.round(2).to_html(classes="table", border=0)
+    metrics = ["Average", "Max", "Min", "Median"]
+    version_stats_df = pd.DataFrame(
+        {
+            "Average": df[version_cols].mean(skipna=True),
+            "Max": df[version_cols].max(skipna=True),
+            "Min": df[version_cols].min(skipna=True),
+            "Median": df[version_cols].median(skipna=True),
+        }
+    )
+    version_stats_df = version_stats_df[metrics].round(2)
 
-    # Prepare tidy data for visualisations
-    box_figures: Dict[str, Dict] = {}
+    version_stats_rows: List[Dict[str, object]] = []
+    for metric in metrics:
+        metric_values: Dict[str, float | None] = {}
+        for version in version_cols:
+            if version in version_stats_df.index:
+                value = version_stats_df.at[version, metric]
+                metric_values[version] = float(value) if pd.notna(value) else None
+            else:
+                metric_values[version] = None
+        version_stats_rows.append({"metric": metric, "values": metric_values})
+
+    box_figures: Dict[str, Dict[str, object]] = {}
     for ver in dropdown_versions:
         fig = _build_box_from_stats(stats_df, ver, service_order)
         box_figures[ver] = json.loads(fig.to_json()) if fig else {"data": [], "layout": {}}
 
-    # Average time per service line chart (all versions)
     service_avg_multi = (
         melted.groupby(["service", "version"])["loading_time"].mean().reset_index()
     )
@@ -564,12 +835,9 @@ def _render_dashboard_page(active_view: str) -> str:
             wide = wide.reindex(service_order)
         wide = wide.dropna(how="all")
 
-    line_html = "<p>No data available for line chart.</p>"
-    bar_html = "<p>No data available for bar chart.</p>"
-    line_fig_payload = {}
-    bar_fig_payload = {}
-    if dataset_error:
-        bar_html = f"<p class=\"message error\">{dataset_error}</p>"
+    line_fig_payload: Dict[str, object] = {"data": [], "layout": {}}
+    bar_fig_payload: Dict[str, object] = {"data": [], "layout": {}}
+
     if not wide.empty:
         fig_line = go.Figure()
         for version in version_cols:
@@ -582,20 +850,21 @@ def _render_dashboard_page(active_view: str) -> str:
                         name=version,
                     )
                 )
-        fig_line.update_layout(
-            title="Average Loading Time per Service (by Version)",
-            xaxis_title="Service",
-            yaxis_title="Average Loading Time (ms)",
-            margin=dict(l=30, r=20, t=60, b=80),
-            legend_title="Version",
-        )
-        line_html = to_html(fig_line, include_plotlyjs=False, full_html=False)
-        line_fig_payload = json.loads(fig_line.to_json())
+        if fig_line.data:
+            fig_line.update_layout(
+                title="Average Loading Time per Service (by Version)",
+                xaxis_title="Service",
+                yaxis_title="Average Loading Time (ms)",
+                margin=dict(l=30, r=20, t=60, b=80),
+                legend_title="Version",
+            )
+            line_fig_payload = json.loads(fig_line.to_json())
 
         if not dataset_error:
             fig_bar = _build_bar_figure_from_wide(wide, version_cols)
-            bar_html = to_html(fig_bar, include_plotlyjs=False, full_html=False)
-            bar_fig_payload = json.loads(fig_bar.to_json())
+            if fig_bar.data:
+                bar_fig_payload = json.loads(fig_bar.to_json())
+
     compare_data: Dict[str, Dict[str, float]] = {}
     compare_services: List[str] = []
     if not service_avg_multi.empty:
@@ -620,1391 +889,47 @@ def _render_dashboard_page(active_view: str) -> str:
             if svc_values:
                 compare_data[svc] = svc_values
 
-    template = """
-    <!doctype html>
-    <html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <title>Analytics Dashboard</title>
-        <style>
-            :root {
-                color-scheme: light;
-                font-family: Arial, sans-serif;
-            }
-            body {
-                margin: 0;
-                background: #f7f8fa;
-                height: 100vh;
-                overflow: hidden;
-            }
-            a {
-                color: #1a73e8;
-                text-decoration: none;
-            }
-            a:hover { text-decoration: underline; }
-
-            .app {
-                display: flex;
-                min-height: 100vh;
-            }
-            .sidebar {
-                width: 70px;
-                background: #1f2933;
-                color: #fff;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                padding: 1rem 0;
-                gap: 1rem;
-                box-shadow: inset -1px 0 0 rgba(15, 23, 42, 0.4);
-                position: sticky;
-                top: 0;
-                align-self: flex-start;
-                flex-shrink: 0;
-                min-height: 100vh;
-            }
-            .sidebar-btn {
-                width: 100%;
-                border: none;
-                background: transparent;
-                color: inherit;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                gap: 0.35rem;
-                padding: 0.55rem 0;
-                cursor: pointer;
-                opacity: 0.7;
-                transition: opacity 0.2s ease, background 0.2s ease;
-            }
-            .sidebar-btn .icon {
-                font-size: 1.35rem;
-            }
-            .sidebar-btn .label {
-                font-size: 0.62rem;
-                letter-spacing: 0.08em;
-            }
-            .sidebar-btn.active,
-            .sidebar-btn:hover {
-                opacity: 1;
-                background: rgba(255, 255, 255, 0.12);
-            }
-            .main-shell {
-                flex: 1;
-                display: flex;
-                flex-direction: column;
-                min-height: 100vh;
-                height: 100vh;
-                overflow: hidden;
-            }
-            header {
-                position: sticky;
-                top: 0;
-                z-index: 10;
-                background: #ffffffd9;
-                backdrop-filter: blur(6px);
-                border-bottom: 1px solid #e0e4ea;
-                padding: 1rem 2rem;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 1rem;
-            }
-            header h1 {
-                margin: 0;
-                font-size: 1.4rem;
-                font-weight: 600;
-            }
-            .view-indicator {
-                font-size: 0.85rem;
-                color: #52606d;
-                margin-left: 0.75rem;
-            }
-            .controls {
-                display: flex;
-                align-items: center;
-                gap: 1rem;
-                font-size: 0.95rem;
-            }
-            .control-group {
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
-            }
-            .control-group label {
-                font-weight: 600;
-                color: #4a4f57;
-            }
-            select {
-                padding: 0.35rem 0.6rem;
-                border-radius: 6px;
-                border: 1px solid #c7ccd6;
-                font-size: 0.95rem;
-                background: #fff;
-            }
-            main {
-                flex: 1;
-                padding: 1.5rem 2rem 2rem;
-                overflow-y: auto;
-            }
-            .panel {
-                display: none;
-            }
-            .panel.active {
-                display: block;
-            }
-            .grid {
-                display: grid;
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                gap: 1.5rem;
-            }
-            .card {
-                background: #fff;
-                border-radius: 12px;
-                padding: 1.25rem;
-                box-shadow: 0 6px 16px -12px rgba(0,0,0,0.35);
-                display: flex;
-                flex-direction: column;
-                min-height: 300px;
-            }
-            .card h2 {
-                margin: 0 0 0.75rem;
-                font-size: 1.1rem;
-                font-weight: 600;
-                color: #1f2933;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-            .card h2 span {
-                font-size: 0.9rem;
-                font-weight: 400;
-                color: #6b7280;
-            }
-            .table {
-                border-collapse: collapse;
-                width: 100%;
-                font-size: 0.9rem;
-            }
-            .table th,
-            .table td {
-                border: 1px solid #e0e4ea;
-                padding: 0.4rem 0.6rem;
-                text-align: right;
-            }
-            .table th:first-child,
-            .table td:first-child {
-                text-align: left;
-            }
-            .table thead {
-                background: #f2f4f8;
-            }
-            .chart-area {
-                flex: 1;
-                min-height: 260px;
-            }
-            #boxPlot {
-                width: 100%;
-                height: 100%;
-                min-height: 260px;
-            }
-            .message {
-                color: #6b7280;
-                font-size: 0.9rem;
-            }
-            .message.error {
-                color: #d14343;
-                font-weight: 600;
-            }
-            .message.warning {
-                color: #b7791f;
-                font-weight: 600;
-            }
-            .card-actions {
-                display: flex;
-                gap: 0.5rem;
-            }
-            .btn {
-                border-radius: 6px;
-                border: 1px solid #c7ccd6;
-                background: #fff;
-                padding: 0.35rem 0.7rem;
-                font-size: 0.85rem;
-                cursor: pointer;
-                transition: background 0.2s ease, border-color 0.2s ease;
-            }
-           .btn:hover {
-               background: #eef3fb;
-               border-color: #a7b6d0;
-           }
-            .btn.btn-expand {
-                font-size: 0.8rem;
-                padding: 0.25rem 0.5rem;
-            }
-           .btn.btn-close {
-               font-size: 0.85rem;
-               padding: 0.35rem 0.7rem;
-           }
-            .reports-layout {
-                display: grid;
-                grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
-                gap: 1.5rem;
-                align-items: flex-start;
-            }
-            .reports-list,
-            .reports-viewer {
-                background: #fff;
-                border-radius: 12px;
-                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
-                min-height: 320px;
-            }
-            .reports-list {
-                padding: 1rem;
-                display: flex;
-                flex-direction: column;
-                position: sticky;
-                top: 0;
-                align-self: flex-start;
-                max-height: calc(100vh - 1rem);
-                overflow: hidden;
-            }
-            .reports-list h2 {
-                margin: 0 0 0.75rem;
-                font-size: 1rem;
-                font-weight: 600;
-            }
-            .reports-list ul {
-                list-style: none;
-                padding: 0;
-                margin: 0;
-                overflow-y: auto;
-                flex: 1;
-            }
-            .reports-list li {
-                margin-bottom: 0.4rem;
-            }
-            .report-link {
-                width: 100%;
-                border: none;
-                border-radius: 8px;
-                background: #eef2f7;
-                color: #1f2933;
-                font-size: 0.9rem;
-                padding: 0.45rem 0.6rem;
-                text-align: left;
-                cursor: pointer;
-                transition: background 0.2s ease, color 0.2s ease;
-            }
-            .report-link:hover {
-                background: #d9e2f1;
-            }
-            .report-link.active {
-                background: #1a73e8;
-                color: #fff;
-            }
-            .reports-viewer {
-                padding: 1rem;
-                display: flex;
-                flex-direction: column;
-            }
-            .reports-viewer h2 {
-                margin: 0 0 0.75rem;
-                font-size: 1rem;
-                font-weight: 600;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-            }
-            .reports-viewer h2 small {
-                font-size: 0.75rem;
-                color: #52606d;
-                margin-left: 0.5rem;
-            }
-            .compare-card {
-                background: #fff;
-                border-radius: 12px;
-                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
-                padding: 1.25rem;
-                display: flex;
-                flex-direction: column;
-                gap: 1rem;
-            }
-            .compare-header-row {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 1rem;
-            }
-            .compare-header-text {
-                flex: 1;
-            }
-            .compare-header-text h2 {
-                margin: 0;
-                font-size: 1.1rem;
-                font-weight: 600;
-                color: #1f2933;
-            }
-            .compare-controls {
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                gap: 0.75rem;
-            }
-            .compare-controls label {
-                font-weight: 600;
-                color: #4a4f57;
-            }
-            .compare-table-wrapper {
-                overflow: auto;
-            }
-            #compareTable {
-                width: 100%;
-                border-collapse: collapse;
-            }
-            #compareTable th,
-            #compareTable td {
-                border: 1px solid #e0e4ea;
-                padding: 0.45rem 0.6rem;
-                font-size: 0.9rem;
-                text-align: left;
-            }
-            #compareTable thead {
-                background: #f2f4f8;
-                position: sticky;
-                top: 0;
-            }
-            #compareTable td.value {
-                text-align: right;
-            }
-            #compareTable td.diff-positive {
-                color: #0f7a0f;
-                font-weight: 600;
-            }
-            #compareTable td.diff-negative {
-                color: #d14343;
-                font-weight: 600;
-            }
-            #compareTable td.diff-neutral {
-                color: #52606d;
-            }
-            #reportContent {
-                flex: 1;
-                overflow: auto;
-                border-radius: 8px;
-            }
-            #reportContent table {
-                width: 100%;
-                border-collapse: collapse;
-            }
-            #reportContent th,
-            #reportContent td {
-                border: 1px solid #e0e4ea;
-                padding: 0.35rem 0.5rem;
-                font-size: 0.88rem;
-                text-align: left;
-            }
-            #reportContent thead {
-                background: #f2f4f8;
-                position: sticky;
-                top: 0;
-            }
-            .overlay {
-                position: fixed;
-                inset: 0;
-                z-index: 50;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-            .overlay-backdrop {
-                position: absolute;
-                inset: 0;
-                background: rgba(15, 23, 42, 0.55);
-                backdrop-filter: blur(4px);
-            }
-            .overlay-content {
-                position: relative;
-                background: #fff;
-                border-radius: 12px;
-                width: 96vw;
-                height: 96vh;
-                display: flex;
-                flex-direction: column;
-                box-shadow: 0 25px 60px -20px rgba(15,23,42,0.45);
-            }
-            .overlay-header {
-                padding: 1rem 1.5rem;
-                border-bottom: 1px solid #e0e4ea;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                gap: 1rem;
-            }
-            .overlay-header h3 {
-                margin: 0;
-                font-size: 1.1rem;
-            }
-            .overlay-body {
-                padding: 1.5rem;
-                overflow: auto;
-                flex: 1;
-                display: flex;
-                flex-direction: column;
-            }
-            .overlay-body table {
-                width: 100%;
-            }
-            .overlay-body .plot-container {
-                width: 100%;
-                flex: 1 1 auto;
-                min-height: 0;
-                height: 100%;
-            }
-            .overlay-controls {
-                display: flex;
-                align-items: center;
-                gap: 0.75rem;
-                margin-bottom: 1rem;
-            }
-            .overlay-controls label {
-                font-weight: 600;
-                color: #4a4f57;
-            }
-            .overlay-controls select {
-                padding: 0.35rem 0.6rem;
-                border-radius: 6px;
-                border: 1px solid #c7ccd6;
-                font-size: 0.95rem;
-                background: #fff;
-            }
-
-            @media (max-width: 1100px) {
-                body {
-                    height: auto;
-                    overflow: auto;
-                }
-                .app {
-                    flex-direction: column;
-                }
-                .sidebar {
-                    width: 100%;
-                    flex-direction: row;
-                    justify-content: center;
-                    box-shadow: inset 0 -1px 0 rgba(15, 23, 42, 0.1);
-                    position: static;
-                    min-height: auto;
-                    height: auto;
-                }
-                .sidebar-btn {
-                    flex-direction: row;
-                    gap: 0.5rem;
-                    padding: 0.6rem 1rem;
-                }
-                .main-shell {
-                    min-height: auto;
-                    height: auto;
-                    overflow: visible;
-                }
-                header {
-                    flex-direction: column;
-                    align-items: flex-start;
-                }
-                .controls {
-                    flex-wrap: wrap;
-                }
-                .grid {
-                    grid-template-columns: 1fr;
-                }
-                .reports-layout {
-                    grid-template-columns: 1fr;
-                }
-                .reports-list {
-                    position: static;
-                    height: auto;
-                    max-height: none;
-                    overflow: visible;
-                }
-                .compare-header-row {
-                    flex-direction: column;
-                    align-items: flex-start;
-                    gap: 0.75rem;
-                }
-                .compare-controls {
-                    width: 100%;
-                }
-                .overlay-content {
-                    width: 98vw;
-                    height: 94vh;
-                }
-            }
-        </style>
-        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-    </head>
-    <body>
-        <div class="app">
-            <aside class="sidebar">
-                <button class="sidebar-btn{% if active_view != 'reports' %} active{% endif %}" data-view="analytics" aria-label="Analytics">
-                    <span class="icon">&#128202;</span>
-                    <span class="label">Analytics</span>
-                </button>
-                <button class="sidebar-btn{% if active_view == 'reports' %} active{% endif %}" data-view="reports" aria-label="Reports">
-                    <span class="icon">&#128196;</span>
-                    <span class="label">Reports</span>
-                </button>
-                <button class="sidebar-btn{% if active_view == 'compare' %} active{% endif %}" data-view="compare" aria-label="Compare">
-                    <span class="icon">&#128200;</span>
-                    <span class="label">Compare</span>
-                </button>
-            </aside>
-            <div class="main-shell">
-                <header>
-                    <div class="headline">
-                        <h1>Service Performance Metric</h1>
-                        <span class="view-indicator" id="viewIndicator"></span>
-                    </div>
-                    <div class="controls"></div>
-                </header>
-                <main>
-                    <section id="panel-analytics" class="panel{% if active_view != 'reports' %} active{% endif %}">
-                        <div class="grid">
-                            <section class="card" data-card="table">
-                                <h2>Per-Version Evolution <span>(Aggregates)</span>
-                                    <button class="btn btn-expand" data-target="table">Expand</button>
-                                </h2>
-                                <div class="chart-area">
-                                    {{ version_stats_table | safe }}
-                                </div>
-                            </section>
-                            <section class="card" data-card="box">
-                                <h2>
-                                    <span>Service Distribution <span>(Box Plot)</span></span>
-                                    <span class="card-actions">
-                                        <label for="version" style="font-weight:600;color:#4a4f57;margin-right:0.5rem;">Version</label>
-                                        <select id="version" name="version" style="margin-right:0.75rem;">
-                                            {% for version in versions %}
-                                                <option value="{{ version }}" {% if version == selected_version %}selected{% endif %}>{{ version }}</option>
-                                            {% endfor %}
-                                        </select>
-                                        <button class="btn btn-expand" data-target="box">Expand</button>
-                                    </span>
-                                </h2>
-                                <div class="chart-area">
-                                    <div id="boxPlot"></div>
-                                    <p id="boxMessage" class="message" style="display:none;">No data available for selected version.</p>
-                                </div>
-                            </section>
-                            <section class="card" data-card="line">
-                                <h2>Average Loading Time Trend <span>(Line)</span>
-                                    <button class="btn btn-expand" data-target="line">Expand</button>
-                                </h2>
-                                <div class="chart-area">
-                                    {{ line_plot | safe }}
-                                </div>
-                            </section>
-                            <section class="card" data-card="bar">
-                                <h2>
-                                    <span>Average Loading Time <span>(Grouped Bar)</span></span>
-                                    <span class="card-actions">
-                                        {% if datasets %}
-                                        <label for="dataset" style="font-weight:600;color:#4a4f57;margin-right:0.5rem;">Dataset</label>
-                                        <select id="dataset" name="dataset" style="margin-right:0.75rem;">
-                                            {% for ds in datasets %}
-                                                <option value="{{ ds }}" {% if ds == selected_dataset %}selected{% endif %}>{{ ds }}</option>
-                                            {% endfor %}
-                                        </select>
-                                        {% endif %}
-                                        <button class="btn btn-expand" data-target="bar">Expand</button>
-                                    </span>
-                                </h2>
-                                <div class="chart-area">
-                                    {{ bar_plot | safe }}
-                                </div>
-                            </section>
-                        </div>
-                    </section>
-                    <section id="panel-reports" class="panel{% if active_view == 'reports' %} active{% endif %}">
-                        <div class="reports-layout">
-                            <div class="reports-list">
-                                <h2>CSV Reports</h2>
-                                {% if report_files %}
-                                <ul id="reportList">
-                                    {% for f in report_files %}
-                                        <li><button type="button" class="report-link" data-file="{{ f }}">{{ f }}</button></li>
-                                    {% endfor %}
-                                </ul>
-                                {% else %}
-                                <p class="message">No CSV files found for this dataset.</p>
-                                {% endif %}
-                            </div>
-                            <div class="reports-viewer">
-                                <h2 id="reportTitle">Preview{% if selected_dataset %} <small>{{ selected_dataset }}</small>{% endif %}</h2>
-                                <div id="reportContent">
-                                    <p class="message">Select a CSV to preview.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-                    <section id="panel-compare" class="panel{% if active_view == 'compare' %} active{% endif %}">
-                        <div class="compare-card">
-                            <div class="compare-header-row">
-                                <div class="compare-header-text">
-                                    <h2>Version Comparison</h2>
-                                </div>
-                                {% if versions %}
-                                <div class="compare-controls">
-                                    <label for="compareVersionA">Version A</label>
-                                    <select id="compareVersionA" name="compareA">
-                                        {% for ver in versions %}
-                                            <option value="{{ ver }}" {% if ver == compare_default_a %}selected{% endif %}>{{ ver }}</option>
-                                        {% endfor %}
-                                    </select>
-                                    <label for="compareVersionB">Version B</label>
-                                    <select id="compareVersionB" name="compareB">
-                                        {% for ver in versions %}
-                                            <option value="{{ ver }}" {% if ver == compare_default_b %}selected{% endif %}>{{ ver }}</option>
-                                        {% endfor %}
-                                    </select>
-                                    <label for="compareFilter">Change</label>
-                                    <select id="compareFilter" name="filter">
-                                        <option value="all" {% if compare_default_filter == 'all' %}selected{% endif %}>All</option>
-                                        <option value="positive" {% if compare_default_filter == 'positive' %}selected{% endif %}>Positive</option>
-                                        <option value="negative" {% if compare_default_filter == 'negative' %}selected{% endif %}>Negative</option>
-                                    </select>
-                                </div>
-                                {% endif %}
-                            </div>
-                            <div class="compare-table-wrapper">
-                                <table id="compareTable">
-                                    <thead>
-                                        <tr>
-                                            <th>Service</th>
-                                            <th id="compareColA">Version A</th>
-                                            <th id="compareColB">Version B</th>
-                                            <th>Change</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="compareTableBody">
-                                        <tr>
-                                            <td colspan="4" class="message">No comparison data available.</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </section>
-                </main>
-            </div>
-        </div>
-        <div class="overlay" id="overlay" style="display:none;">
-            <div class="overlay-backdrop"></div>
-            <div class="overlay-content">
-                <div class="overlay-header">
-                    <h3 id="overlayTitle"></h3>
-                    <button class="btn btn-close" id="overlayClose">Close</button>
-                </div>
-                <div class="overlay-body" id="overlayBody"></div>
-            </div>
-        </div>
-
-
-        <script>
-(() => {
-  const boxFigures = {{ box_figures | tojson }};
-  const versionsList = {{ versions | tojson }};
-  const lineFigure = {{ line_fig | tojson }};
-  let currentBarFigure = {{ bar_fig | tojson }};
-  const versionStatsHTML = {{ version_stats_table | tojson }};
-  const initialVersion = "{{ selected_version }}";
-  const barDataEndpoint = "{{ bar_data_endpoint }}";
-  const barAlerts = {{ bar_alerts | tojson }};
-  const csvApiEndpoint = "{{ csv_api_endpoint }}";
-  const initialView = "{{ active_view }}";
-  const initialDataset = "{{ selected_dataset }}";
-  const initialReport = "{{ initial_report }}";
-  const reportFiles = {{ report_files | tojson }};
-  const compareData = {{ compare_data | tojson }};
-  const compareServices = {{ compare_services | tojson }};
-  const compareDefaultA = "{{ compare_default_a }}";
-  const compareDefaultB = "{{ compare_default_b }}";
-  const compareDefaultFilter = "{{ compare_default_filter }}";
-
-  const versionSelect = document.getElementById("version");
-  const datasetSelect = document.getElementById("dataset");
-  const sidebarButtons = Array.from(document.querySelectorAll(".sidebar-btn"));
-  const panels = {
-    analytics: document.getElementById("panel-analytics"),
-    reports: document.getElementById("panel-reports"),
-    compare: document.getElementById("panel-compare"),
-  };
-  const viewIndicator = document.getElementById("viewIndicator");
-  const reportList = document.getElementById("reportList");
-  const reportContent = document.getElementById("reportContent");
-  const reportTitle = document.getElementById("reportTitle");
-  const overlay = document.getElementById("overlay");
-  const overlayBody = document.getElementById("overlayBody");
-  const overlayTitle = document.getElementById("overlayTitle");
-  const overlayClose = document.getElementById("overlayClose");
-  const overlayBackdrop = overlay ? overlay.querySelector(".overlay-backdrop") : null;
-  const comparePanel = document.getElementById("panel-compare");
-  const compareVersionASelect = document.getElementById("compareVersionA");
-  const compareVersionBSelect = document.getElementById("compareVersionB");
-  const compareFilterSelect = document.getElementById("compareFilter");
-  const compareTableBody = document.getElementById("compareTableBody");
-  const compareColA = document.getElementById("compareColA");
-  const compareColB = document.getElementById("compareColB");
-
-  let currentView = initialView === "reports" || initialView === "compare" ? initialView : "analytics";
-  let currentBarDataset = initialDataset || (datasetSelect ? datasetSelect.value : "");
-  let reportViewerLoaded = false;
-  let activeReportFile = initialReport || "";
-  let overlayVersionSelect = null;
-  let overlayBoxContainer = null;
-  let overlayDatasetSelect = null;
-
-  if (Array.isArray(barAlerts) && barAlerts.length) {
-    barAlerts.forEach((msg) => alert(msg));
-  }
-
-  function cloneFigure(fig) {
-    if (!fig) {
-      return null;
+    state: Dict[str, object] = {
+        "activeView": view_mode,
+        "views": ["analytics", "reports", "compare"],
+        "datasetOptions": dataset_options,
+        "selectedDataset": selected_dataset,
+        "datasetWarnings": dataset_warnings,
+        "datasetError": dataset_error,
+        "barAlerts": bar_alerts,
+        "versions": version_cols,
+        "boxVersions": dropdown_versions,
+        "selectedVersion": selected_version,
+        "versionStats": {
+            "metrics": metrics,
+            "versions": version_stats_df.index.tolist(),
+            "rows": version_stats_rows,
+        },
+        "boxFigures": box_figures,
+        "lineFigure": line_fig_payload,
+        "barFigure": bar_fig_payload,
+        "reports": {
+            "files": report_files,
+            "initial": initial_report,
+        },
+        "compare": {
+            "services": compare_services,
+            "data": compare_data,
+            "defaults": {
+                "versionA": compare_version_a,
+                "versionB": compare_version_b,
+                "filter": compare_filter,
+            },
+        },
+        "serviceOrder": service_order,
+        "endpoints": {
+            "csv": url_for("api_csv"),
+            "download": url_for("download_csv"),
+            "dashboard": url_for("api_dashboard"),
+            "analyticsBar": url_for("analytics_bardata"),
+        },
     }
-    return JSON.parse(JSON.stringify(fig));
-  }
-
-  function applyLayoutTweaks(fig) {
-    if (!fig || !fig.layout) {
-      return fig;
-    }
-    const layout = Object.assign({}, fig.layout);
-    layout.autosize = true;
-    layout.margin = Object.assign({ l: 40, r: 20, t: 55, b: 50 }, layout.margin || {});
-    return Object.assign({}, fig, { layout });
-  }
-
-  function renderResponsivePlot(container, fig) {
-    if (!container) {
-      return false;
-    }
-    if (!fig || !fig.data || !fig.data.length) {
-      Plotly.purge(container);
-      return false;
-    }
-    const plotFig = applyLayoutTweaks(cloneFigure(fig));
-    Plotly.newPlot(container, plotFig.data, plotFig.layout, { responsive: true, displaylogo: false });
-    setTimeout(() => Plotly.Plots.resize(container), 0);
-    return true;
-  }
-
-  function renderBoxFigure(version) {
-    const boxDiv = document.getElementById("boxPlot");
-    const message = document.getElementById("boxMessage");
-    const fig = cloneFigure(boxFigures[version] || null);
-    if (!boxDiv || !message) {
-      return;
-    }
-    if (!fig || !fig.data || !fig.data.length) {
-      Plotly.purge(boxDiv);
-      message.style.display = "block";
-      return;
-    }
-    message.style.display = "none";
-    renderResponsivePlot(boxDiv, fig);
-  }
-
-  function setActiveReportButton(file) {
-    if (!reportList) {
-      return;
-    }
-    Array.from(reportList.querySelectorAll(".report-link")).forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.file === file);
-    });
-  }
-
-  function showReportMessage(message, type = "info") {
-    if (!reportContent) {
-      return;
-    }
-    const p = document.createElement("p");
-    p.className = type === "error" ? "message error" : "message";
-    p.textContent = message;
-    reportContent.innerHTML = "";
-    reportContent.appendChild(p);
-    reportContent.scrollTop = 0;
-  }
-
-  function updateReportTitle(file) {
-    if (!reportTitle) {
-      return;
-    }
-    const datasetLabel = (datasetSelect && datasetSelect.value) || initialDataset || "default";
-    if (file) {
-      reportTitle.innerHTML = `Preview <small>${datasetLabel} · ${file}</small>`;
-    } else if (datasetLabel) {
-      reportTitle.innerHTML = `Preview <small>${datasetLabel}</small>`;
-    } else {
-      reportTitle.textContent = "Preview";
-    }
-  }
-
-  function renderReportTable(headers, rows) {
-    if (!reportContent) {
-      return;
-    }
-    if (!headers || !headers.length) {
-      showReportMessage("No data available in this CSV.");
-      return;
-    }
-    const table = document.createElement("table");
-    const thead = document.createElement("thead");
-    const headRow = document.createElement("tr");
-    headers.forEach((head) => {
-      const th = document.createElement("th");
-      th.textContent = head;
-      headRow.appendChild(th);
-    });
-    thead.appendChild(headRow);
-    table.appendChild(thead);
-    const tbody = document.createElement("tbody");
-    if (rows && rows.length) {
-      rows.forEach((row) => {
-        const tr = document.createElement("tr");
-        row.forEach((cell) => {
-          const td = document.createElement("td");
-          td.textContent = cell;
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
-    } else {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = headers.length;
-      td.textContent = "No data rows";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
-    reportContent.innerHTML = "";
-    reportContent.appendChild(table);
-    reportContent.scrollTop = 0;
-  }
-
-  function getCompareValue(service, version) {
-    if (!compareData || !service || !version) {
-      return null;
-    }
-    const svcRow = compareData[service];
-    if (!svcRow) {
-      return null;
-    }
-    const val = svcRow[version];
-    return typeof val === "number" ? val : null;
-  }
-
-  function formatMs(value) {
-    if (value === null || value === undefined) {
-      return "?";
-    }
-    return `${value.toFixed(1)} ms`;
-  }
-
-  function formatDiff(valueA, valueB) {
-    if (valueA === null || valueB === null) {
-      return { text: "?", cls: "diff-neutral" };
-    }
-    if (valueA === 0) {
-      return { text: "N/A", cls: "diff-neutral" };
-    }
-    const pct = ((valueB - valueA) / valueA) * 100;
-    const text = `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
-    let cls = "diff-neutral";
-    if (pct > 0.5) {
-      cls = "diff-negative";
-    } else if (pct < -0.5) {
-      cls = "diff-positive";
-    }
-    return { text, cls };
-  }
-
-  function updateCompareTable() {
-    if (!compareTableBody) {
-      return;
-    }
-    const versionA = compareVersionASelect ? compareVersionASelect.value : compareDefaultA;
-    const versionB = compareVersionBSelect ? compareVersionBSelect.value : compareDefaultB;
-    const filterValue = ((compareFilterSelect && compareFilterSelect.value) || compareDefaultFilter || "all");
-    if (compareFilterSelect && compareFilterSelect.value !== filterValue) {
-      compareFilterSelect.value = filterValue;
-    }
-    if (compareColA) {
-      compareColA.textContent = versionA ? `${versionA} (avg ms)` : "Version A";
-    }
-    if (compareColB) {
-      compareColB.textContent = versionB ? `${versionB} (avg ms)` : "Version B";
-    }
-
-    compareTableBody.innerHTML = "";
-    let rowsRendered = 0;
-    if (!compareServices.length || !versionA || !versionB) {
-      const row = document.createElement("tr");
-      const cell = document.createElement("td");
-      cell.textContent = "No comparison data available.";
-      cell.colSpan = 4;
-      cell.className = "message";
-      row.appendChild(cell);
-      compareTableBody.appendChild(row);
-      return;
-    }
-
-    compareServices.forEach((service) => {
-      const valueA = getCompareValue(service, versionA);
-      const valueB = getCompareValue(service, versionB);
-      const diff = formatDiff(valueA, valueB);
-      const diffClass = diff.cls || "diff-neutral";
-      if (filterValue === "positive" && diffClass !== "diff-positive") {
-        return;
-      }
-      if (filterValue === "negative" && diffClass !== "diff-negative") {
-        return;
-      }
-
-      const row = document.createElement("tr");
-      const cellService = document.createElement("td");
-      cellService.textContent = service;
-      row.appendChild(cellService);
-
-      const cellA = document.createElement("td");
-      cellA.className = "value";
-      cellA.textContent = formatMs(valueA);
-      row.appendChild(cellA);
-
-      const cellB = document.createElement("td");
-      cellB.className = "value";
-      cellB.textContent = formatMs(valueB);
-      row.appendChild(cellB);
-
-      const diffCell = document.createElement("td");
-      diffCell.classList.add("value");
-      diffCell.textContent = diff.text;
-      diffCell.classList.add(diffClass);
-      row.appendChild(diffCell);
-
-      compareTableBody.appendChild(row);
-      rowsRendered += 1;
-    });
-
-    if (!rowsRendered) {
-      const row = document.createElement("tr");
-      const cell = document.createElement("td");
-      cell.textContent = "No comparison data available.";
-      cell.colSpan = 4;
-      cell.className = "message";
-      row.appendChild(cell);
-      compareTableBody.appendChild(row);
-    }
-
-    if (currentView === "compare") {
-      const url = new URL(window.location.href);
-      if (versionA) {
-        url.searchParams.set("compareA", versionA);
-      } else {
-        url.searchParams.delete("compareA");
-      }
-      if (versionB) {
-        url.searchParams.set("compareB", versionB);
-      } else {
-        url.searchParams.delete("compareB");
-      }
-      if (filterValue && filterValue !== "all") {
-        url.searchParams.set("filter", filterValue);
-      } else {
-        url.searchParams.delete("filter");
-      }
-      window.history.replaceState(null, "", url);
-    }
-  }
-
-  function loadReport(file) {
-    if (!file) {
-      showReportMessage("Select a CSV to preview.");
-      updateReportTitle("");
-      return;
-    }
-    setActiveReportButton(file);
-    activeReportFile = file;
-    showReportMessage("Loading report...");
-    const params = new URLSearchParams();
-    params.set("file", file);
-    const currentDatasetValue = datasetSelect ? datasetSelect.value : initialDataset;
-    if (currentDatasetValue) {
-      params.set("dataset", currentDatasetValue);
-    }
-    fetch(`${csvApiEndpoint}?${params.toString()}`)
-      .then((resp) => {
-        if (!resp.ok) {
-          throw new Error("Failed to load CSV file");
-        }
-        return resp.json();
-      })
-      .then((payload) => {
-        reportViewerLoaded = true;
-        updateReportTitle(file);
-        renderReportTable(payload.headers || [], payload.rows || []);
-        const url = new URL(window.location.href);
-        url.searchParams.set("report", file);
-        url.searchParams.set("view", currentView);
-        window.history.replaceState(null, "", url);
-      })
-      .catch((err) => {
-        console.error(err);
-        reportViewerLoaded = false;
-        showReportMessage("Unable to load CSV content.", "error");
-      });
-  }
-
-  function updateView(view) {
-    let targetView = "analytics";
-    if (view === "reports" && panels.reports) {
-      targetView = "reports";
-    } else if (view === "compare" && panels.compare) {
-      targetView = "compare";
-    }
-    currentView = targetView;
-
-    Object.entries(panels).forEach(([key, panel]) => {
-      if (panel) {
-        panel.classList.toggle("active", key === targetView);
-      }
-    });
-
-    sidebarButtons.forEach((btn) => {
-      const isActive = btn.dataset.view === targetView;
-      btn.classList.toggle("active", isActive);
-      btn.setAttribute("aria-current", isActive ? "page" : "false");
-    });
-
-    if (viewIndicator) {
-      viewIndicator.textContent =
-        targetView === "analytics"
-          ? "Analytics Dashboard"
-          : targetView === "reports"
-            ? "CSV Reports"
-            : "Version Comparison";
-    }
-
-    const url = new URL(window.location.href);
-    url.searchParams.set("view", targetView);
-    window.history.replaceState(null, "", url);
-
-    if (targetView === "reports") {
-      if (!reportViewerLoaded) {
-        if (activeReportFile) {
-          loadReport(activeReportFile);
-        } else if (initialReport) {
-          loadReport(initialReport);
-        } else if (reportFiles.length) {
-          loadReport(reportFiles[0]);
-        } else {
-          showReportMessage("No CSV files found for this dataset.");
-        }
-      }
-    } else if (targetView === "compare") {
-      updateCompareTable();
-    }
-  }
-
-  function closeOverlay() {
-    if (!overlay) {
-      return;
-    }
-    overlay.style.display = "none";
-    overlayBody.innerHTML = "";
-    overlayVersionSelect = null;
-    overlayBoxContainer = null;
-    overlayDatasetSelect = null;
-  }
-
-  function openOverlay(target) {
-    if (!overlay) {
-      return;
-    }
-    overlayBody.innerHTML = "";
-    overlayVersionSelect = null;
-    overlayBoxContainer = null;
-    overlayDatasetSelect = null;
-
-    if (target === "table") {
-      overlayTitle.textContent = "Per-Version Evolution (Aggregates)";
-      const tableWrapper = document.createElement("div");
-      tableWrapper.innerHTML = versionStatsHTML;
-      overlayBody.appendChild(tableWrapper);
-    } else if (target === "box") {
-      overlayTitle.textContent = "Service Distribution (Box Plot)";
-      const controls = document.createElement("div");
-      controls.className = "overlay-controls";
-      const overlayLabel = document.createElement("label");
-      overlayLabel.setAttribute("for", "overlay-version");
-      overlayLabel.textContent = "Version";
-      const overlaySelect = document.createElement("select");
-      overlaySelect.id = "overlay-version";
-      versionsList.forEach((ver) => {
-        const opt = document.createElement("option");
-        opt.value = ver;
-        opt.textContent = ver;
-        overlaySelect.appendChild(opt);
-      });
-      if (versionSelect) {
-        overlaySelect.value = versionSelect.value;
-      }
-      controls.appendChild(overlayLabel);
-      controls.appendChild(overlaySelect);
-      overlayBody.appendChild(controls);
-      const boxContainer = document.createElement("div");
-      boxContainer.className = "plot-container";
-      overlayBody.appendChild(boxContainer);
-      const currentVersion = (versionSelect && versionSelect.value) || versionsList[0];
-      renderResponsivePlot(boxContainer, boxFigures[currentVersion]);
-      overlayVersionSelect = overlaySelect;
-      overlayBoxContainer = boxContainer;
-      overlaySelect.addEventListener("change", (ev) => {
-        const chosen = ev.target.value;
-        if (versionSelect && versionSelect.value !== chosen) {
-          versionSelect.value = chosen;
-          versionSelect.dispatchEvent(new Event("change"));
-        } else {
-          renderBoxFigure(chosen);
-          renderResponsivePlot(boxContainer, boxFigures[chosen]);
-        }
-      });
-    } else if (target === "line") {
-      overlayTitle.textContent = "Average Loading Time Trend (Line)";
-      const lineContainer = document.createElement("div");
-      lineContainer.className = "plot-container";
-      overlayBody.appendChild(lineContainer);
-      if (lineFigure && lineFigure.data) {
-        renderResponsivePlot(lineContainer, lineFigure);
-      }
-    } else if (target === "bar") {
-      overlayTitle.textContent = "Average Loading Time (Grouped Bar)";
-      const barContainer = document.createElement("div");
-      barContainer.className = "plot-container";
-      if (datasetSelect) {
-        const controls = document.createElement("div");
-        controls.className = "overlay-controls";
-        const dsLabel = document.createElement("label");
-        dsLabel.setAttribute("for", "overlay-dataset");
-        dsLabel.textContent = "Dataset";
-        const dsSelect = datasetSelect.cloneNode(true);
-        dsSelect.id = "overlay-dataset";
-        dsSelect.value = currentBarDataset || (datasetSelect ? datasetSelect.value : dsSelect.value);
-        controls.appendChild(dsLabel);
-        controls.appendChild(dsSelect);
-        overlayBody.appendChild(controls);
-        overlayDatasetSelect = dsSelect;
-        dsSelect.addEventListener("change", (ev) => {
-          const chosen = ev.target.value;
-          const params = new URLSearchParams();
-          if (chosen) {
-            params.set("dataset", chosen);
-          }
-          fetch(`${barDataEndpoint}?${params.toString()}`)
-            .then((resp) => {
-              if (!resp.ok) {
-                throw new Error("Failed to fetch dataset bar data");
-              }
-              return resp.json();
-            })
-            .then((payload) => {
-              if (Array.isArray(payload.warnings)) {
-                payload.warnings.forEach((msg) => alert(msg));
-              }
-              if (payload.error) {
-                alert(payload.error);
-              }
-              currentBarDataset = payload.dataset || chosen || "";
-              if (dsSelect.value !== currentBarDataset) {
-                dsSelect.value = currentBarDataset;
-              }
-              currentBarFigure = payload.figure || { data: [], layout: {} };
-              if (!payload.error && currentBarFigure.data && currentBarFigure.data.length) {
-                renderResponsivePlot(barContainer, currentBarFigure);
-              } else {
-                Plotly.purge(barContainer);
-              }
-            })
-            .catch((err) => {
-              console.error(err);
-            });
-        });
-      }
-      overlayBody.appendChild(barContainer);
-      if (currentBarFigure && currentBarFigure.data) {
-        renderResponsivePlot(barContainer, currentBarFigure);
-      }
-    }
-
-    overlay.style.display = "flex";
-  }
-
-  Array.from(document.querySelectorAll(".btn-expand")).forEach((btn) => {
-    btn.addEventListener("click", (event) => {
-      event.preventDefault();
-      const target = btn.getAttribute("data-target");
-      openOverlay(target || "table");
-    });
-  });
-
-  if (overlayClose) {
-    overlayClose.addEventListener("click", () => closeOverlay());
-  }
-  if (overlayBackdrop) {
-    overlayBackdrop.addEventListener("click", () => closeOverlay());
-  }
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") {
-      closeOverlay();
-    }
-  });
-
-  if (reportList) {
-    reportList.addEventListener("click", (event) => {
-      const button = event.target.closest(".report-link");
-      if (!button) {
-        return;
-      }
-      event.preventDefault();
-      loadReport(button.dataset.file);
-    });
-  }
-
-  if (datasetSelect) {
-    datasetSelect.addEventListener("change", (ev) => {
-      const dataset = ev.target.value;
-      const url = new URL(window.location.href);
-      if (dataset) {
-        url.searchParams.set("dataset", dataset);
-      } else {
-        url.searchParams.delete("dataset");
-      }
-      url.searchParams.delete("version");
-      url.searchParams.delete("report");
-      url.searchParams.delete("compareA");
-      url.searchParams.delete("compareB");
-      url.searchParams.delete("filter");
-      url.searchParams.set("view", currentView);
-      window.location.href = url.toString();
-    });
-  }
-
-  if (versionSelect) {
-    versionSelect.addEventListener("change", (ev) => {
-      const version = ev.target.value;
-      const url = new URL(window.location.href);
-      url.searchParams.set("version", version);
-      url.searchParams.set("view", currentView);
-      window.history.replaceState(null, "", url);
-      renderBoxFigure(version);
-      if (overlayVersionSelect) {
-        overlayVersionSelect.value = version;
-      }
-      if (overlayBoxContainer) {
-        renderResponsivePlot(
-          overlayBoxContainer,
-          boxFigures[version] || { data: [], layout: {} }
-        );
-      }
-    });
-  }
-
-  if (compareVersionASelect) {
-    compareVersionASelect.addEventListener("change", () => {
-      updateCompareTable();
-    });
-  }
-  if (compareVersionBSelect) {
-    compareVersionBSelect.addEventListener("change", () => {
-      updateCompareTable();
-    });
-  }
-  if (compareFilterSelect) {
-    compareFilterSelect.addEventListener("change", () => {
-      updateCompareTable();
-    });
-  }
-
-  sidebarButtons.forEach((btn) => {
-    btn.addEventListener("click", (event) => {
-      event.preventDefault();
-      updateView(btn.dataset.view || "analytics");
-    });
-  });
-
-  const initialBoxVersion = (initialVersion && boxFigures[initialVersion])
-    ? initialVersion
-    : (versionsList[0] || null);
-  if (compareVersionASelect && compareDefaultA) {
-    compareVersionASelect.value = compareDefaultA;
-  }
-  if (compareVersionBSelect && compareDefaultB) {
-    compareVersionBSelect.value = compareDefaultB;
-  }
-  if (compareFilterSelect) {
-    compareFilterSelect.value = compareDefaultFilter || "all";
-  }
-  if (initialBoxVersion) {
-    if (versionSelect && versionSelect.value !== initialBoxVersion) {
-      versionSelect.value = initialBoxVersion;
-    }
-    renderBoxFigure(initialBoxVersion);
-  }
-
-  updateReportTitle(activeReportFile);
-  updateView(currentView);
-
-  if (reportList && activeReportFile) {
-    setActiveReportButton(activeReportFile);
-  }
-  if (currentView === "reports" && (activeReportFile || reportFiles.length)) {
-    loadReport(activeReportFile || reportFiles[0]);
-  } else if (currentView === "reports") {
-    showReportMessage("No CSV files found for this dataset.");
-  }
-  if (currentView === "compare") {
-    updateCompareTable();
-  }
-})();
-        </script>
-    </body>
-    </html>
-    """
-
-    csv_api_endpoint = url_for("api_csv")
-
-    return render_template_string(
-        template,
-        active_view=view_mode,
-        datasets=dataset_options,
-        selected_dataset=selected_dataset,
-        version_stats_table=version_stats_html,
-        line_plot=line_html,
-        bar_plot=bar_html,
-        line_fig=line_fig_payload,
-        bar_fig=bar_fig_payload,
-        versions=dropdown_versions,
-        selected_version=selected_version,
-        box_figures=box_figures,
-        bar_data_endpoint=url_for("analytics_bardata"),
-        bar_alerts=bar_alerts,
-        report_files=report_files,
-        initial_report=initial_report,
-        csv_api_endpoint=csv_api_endpoint,
-        compare_services=compare_services,
-        compare_data=compare_data,
-        compare_default_a=compare_version_a,
-        compare_default_b=compare_version_b,
-        compare_default_filter=compare_filter,
-    )
+    return state
 
 
 @app.route("/analytics")

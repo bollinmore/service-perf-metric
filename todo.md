@@ -1,4 +1,4 @@
-- [ ] 把 View 的部分跟 Logic 分開放
+- [x] 把 View 的部分跟 Logic 分開放
   ```prompt
   改造目前 HTML & Python 混和在一起的程式碼
   1. 前端框架使用 React
