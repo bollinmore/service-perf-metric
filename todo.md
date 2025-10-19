@@ -1,4 +1,10 @@
 - [ ] 把 View 的部分跟 Logic 分開放
+  ```prompt
+  改造目前 HTML & Python 混和在一起的程式碼
+  1. 前端框架使用 React
+  2. 前端風格控制使用 Tailwind CSS
+  3. 後端維持使用 Pthon + Flask
+  ```
 - [ ] Average Loading Time (Grouped Bar) 改名為 Loading Time
   - [ ] 可選擇顯示平均、最大、最小、中位數
 - [x] 產生績效報表，如果指定版本跟比較對象發現效能降低超過 30%，要特別註記
