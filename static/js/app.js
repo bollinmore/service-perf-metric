@@ -14,7 +14,7 @@
 
   const VIEWS = [
     { id: "analytics", label: "Analytics", icon: "\u{1F4CA}" },
-    { id: "reports", label: "Reports", icon: "\u{1F4C4}" },
+    { id: "reports", label: "CSV Viewer", icon: "\u{1F4C4}" },
     { id: "compare", label: "Compare", icon: "\u2696" },
   ];
 
@@ -554,29 +554,34 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       }}
     />`;
 
-    const reportsPanel = html`<div className="grid gap-6 lg:grid-cols-[240px_1fr]">
-      <aside className="space-y-2">
-        ${(state.reports?.files || []).map((file) => {
-          const active = file === report;
-          return html`<button
-            key=${file}
-            type="button"
-            className=${classNames(
-              "w-full rounded-lg border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-indigo-300",
-              active
-                ? "border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm"
-                : "border-gray-200 bg-white text-gray-700 hover:border-indigo-300 hover:text-indigo-600"
-            )}
-            onClick=${() => {
-              setReport(file);
-              updateUrl({ report: file });
-            }}
-          >
-            ${file}
-          </button>`;
-        })}
+  const reportsPanel = html`<div className="flex h-[calc(100vh-6rem)] gap-6">
+      <aside className="w-64 flex-shrink-0 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-200 px-4 py-3 text-sm font-semibold uppercase tracking-wide text-gray-600">
+          CSV Files
+        </div>
+        <div className="h-[calc(100%-3rem)] space-y-2 overflow-y-auto px-4 py-3">
+          ${(state.reports?.files || []).map((file) => {
+            const active = file === report;
+            return html`<button
+              key=${file}
+              type="button"
+              className=${classNames(
+                "w-full rounded-md border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-indigo-300",
+                active
+                  ? "border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm"
+                  : "border-gray-200 bg-white text-gray-700 hover:border-indigo-300 hover:text-indigo-600"
+              )}
+              onClick=${() => {
+                setReport(file);
+                updateUrl({ report: file });
+              }}
+            >
+              ${file}
+            </button>`;
+          })}
+        </div>
       </aside>
-      <section className="flex min-h-[420px] flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <section className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         <header className="flex flex-col gap-3 border-b border-gray-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-base font-semibold text-gray-900">
