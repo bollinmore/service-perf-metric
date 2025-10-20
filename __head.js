@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
   if (!window.React || !window.ReactDOM) {
     console.error("React or ReactDOM is missing.");
     return;
@@ -540,12 +540,6 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
           if (compare.filter === "negative" && impact !== "regress") {
             return null;
           }
-          if (compare.filter === "faster" && !(diff !== null && diff < 0)) {
-            return null;
-          }
-          if (compare.filter === "slower" && !(diff !== null && diff > 0)) {
-            return null;
-          }
           return { service, a, b, diff, pct, impact };
         })
         .filter(Boolean);
@@ -740,10 +734,8 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
               }}
             >
               <option value="all">All services</option>
-              <option value="positive">≥30% faster</option>
-              <option value="negative">≥30% slower</option>
-              <option value="faster">Faster</option>
-              <option value="slower">Slower</option>
+              <option value="positive">?30% faster</option>
+              <option value="negative">?30% slower</option>
             </select>
           </label>
         </div>
@@ -763,10 +755,10 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
                   ${compare.versionB || "Target"}
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
-                  Δ (ms)
+                  �G (ms)
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
-                  Δ (%)
+                  �G (%)
                 </th>
               </tr>
             </thead>
@@ -774,11 +766,11 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
               ${compareRows.length
                 ? compareRows.map((row) => {
                     const tone =
-                      row.diff === null || row.diff === 0
-                        ? "text-gray-700"
-                        : row.diff > 0
-                        ? "text-red-600"
-                        : "text-green-600";
+                      row.impact === "regress"
+                        ? "text-rose-600"
+                        : row.impact === "improve"
+                        ? "text-emerald-600"
+                        : "text-gray-700";
                     const badge =
                       row.impact === "improve"
                         ? html`<span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
@@ -919,3 +911,4 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
   const initialState = window.__INITIAL_STATE__ || {};
   ReactDOM.createRoot(root).render(html`<${App} initial=${initialState} />`);
 })();
+
