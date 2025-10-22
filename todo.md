@@ -33,3 +33,9 @@
   - Expand button 左邊提供下拉選單包含: Average, Max, Min, Median
   - 在沒有展開 Card 的情況下，允許透過滑鼠捲動來查看表格內容
   ```
+- [ ] CSV Viewer 支援手動匯入檔案
+  ```prompt
+  ```
+- [ ] 串接 n8n 自動化工作流
+  ```prompt
+  ```
