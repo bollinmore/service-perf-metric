@@ -48,7 +48,8 @@ def _collect_log_dirs(data_root: Path) -> List[Tuple[str, Path]]:
     """Return list of (dataset_name, log_dir) pairs under the data root."""
     datasets: List[Tuple[str, Path]] = []
     if not data_root.exists():
-        raise FileNotFoundError(f"Data folder not found: {data_root}")
+        print(f"[generate] Data folder not found: {data_root}")
+        return []
 
     for candidate in sorted(data_root.iterdir()):
         if not candidate.is_dir():
