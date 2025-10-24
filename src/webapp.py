@@ -27,11 +27,14 @@ from flask import (
 
 from werkzeug.utils import secure_filename
 
-from spm import generate_reports
+from spm import DEFAULT_DATA_DIR, generate_reports
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-UPLOAD_ROOT = PROJECT_ROOT / "uploads"
+if DEFAULT_DATA_DIR.is_absolute():
+    DATA_BASE_DIR = DEFAULT_DATA_DIR
+else:
+    DATA_BASE_DIR = (PROJECT_ROOT / DEFAULT_DATA_DIR).resolve()
 
 app = Flask(
     __name__,
@@ -283,7 +286,7 @@ def import_dataset() -> Tuple[Response, int]:
     provided_name = request.form.get("datasetName") if request.form else None
 
     dataset_name: str | None = None
-    upload_root: Path | None = None
+    data_root: Path | None = None
     result_root: Path | None = None
     extracted_root: Path | None = None
 
@@ -310,25 +313,25 @@ def import_dataset() -> Tuple[Response, int]:
         except ValueError as exc:
             abort(400, str(exc))
 
-        upload_root = UPLOAD_ROOT / dataset_name
+        data_root = DATA_BASE_DIR / dataset_name
         result_root = RESULT_BASE_DIR / dataset_name
 
-        if upload_root.exists() or result_root.exists():
+        if data_root.exists() or result_root.exists():
             abort(409, f"Dataset '{dataset_name}' already exists.")
 
-        upload_root.parent.mkdir(parents=True, exist_ok=True)
+        data_root.parent.mkdir(parents=True, exist_ok=True)
         RESULT_BASE_DIR.mkdir(parents=True, exist_ok=True)
 
-        shutil.move(str(extracted_root), upload_root)
+        shutil.move(str(extracted_root), data_root)
 
-    if upload_root is None or result_root is None:
+    if data_root is None or result_root is None:
         abort(500, "Failed to process uploaded dataset.")
 
     try:
-        generate_reports(upload_root, result_root)
+        generate_reports(data_root, result_root)
     except Exception as exc:  # pragma: no cover - defensive cleanup
-        if upload_root and upload_root.exists():
-            shutil.rmtree(upload_root, ignore_errors=True)
+        if data_root and data_root.exists():
+            shutil.rmtree(data_root, ignore_errors=True)
         if result_root and result_root.exists():
             shutil.rmtree(result_root, ignore_errors=True)
         abort(500, f"Failed to process dataset: {exc}")

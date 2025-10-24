@@ -557,6 +557,10 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
                 console.warn("Failed to read import error payload", textError);
               }
             }
+            if (response.status === 409) {
+              const guidance = `Dataset '${datasetName}' already exists. Rename the new dataset or remove the existing folder under 'data/${datasetName}' before importing again.`;
+              message = `${message} ${guidance}`.trim();
+            }
             throw new Error(message);
           }
 
