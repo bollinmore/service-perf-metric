@@ -16,6 +16,7 @@
     { id: "analytics", label: "Analytics", icon: "\u{1F4CA}" },
     { id: "reports", label: "CSV Viewer", icon: "\u{1F4C4}" },
     { id: "compare", label: "Compare", icon: "\u2696" },
+    { id: "api", label: "API", icon: "\u{1F4D6}" },
   ];
 
   const MISSING_VALUE = "N/A";
@@ -753,6 +754,17 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
         .filter(Boolean);
     }, [state.compare, compare]);
 
+    const apiDocsHtml = state.apiDocsHtml || initial.apiDocsHtml || "";
+    const apiDocsView = html`<section
+      className="space-y-4 rounded-xl border border-gray-200 bg-white p-6 text-sm leading-relaxed shadow-sm"
+      dangerouslySetInnerHTML=${{
+        __html:
+          apiDocsHtml && apiDocsHtml.trim()
+            ? apiDocsHtml
+            : "<p>Backend API documentation is not available.</p>",
+      }}
+    ></section>`;
+
     const reportGroups = useMemo(() => {
       const groups = state.reports?.groups;
       if (groups && Object.keys(groups).length) {
@@ -1318,6 +1330,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
           ${view === "analytics" ? analyticsView : null}
           ${view === "reports" ? reportsPanel : null}
           ${view === "compare" ? comparePanel : null}
+          ${view === "api" ? apiDocsView : null}
         </main>
       </div>
     </div>`;

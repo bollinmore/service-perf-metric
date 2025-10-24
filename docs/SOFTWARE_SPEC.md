@@ -312,7 +312,7 @@ curl -F "file=@/path/to/myData.zip" -F "datasetName=myData" http://localhost:800
 
 ### 10.1 Global Layout
 
-- Left vertical sidebar: view switcher (icons + labels): Analytics / CSV Viewer / Compare.
+- Left vertical sidebar: view switcher (icons + labels): Analytics / CSV Viewer / Compare / API (Backend API reference).
 - Header bar: title + dataset selector + loading indicator.
 - Main content: renders current view body.
 

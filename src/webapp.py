@@ -4,8 +4,10 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import tempfile
+from html import escape
 from pathlib import Path
 from typing import Dict, List, Tuple
 import zipfile
@@ -29,6 +31,9 @@ from werkzeug.utils import secure_filename
 
 from spm import DEFAULT_DATA_DIR, generate_reports
 
+
+# Cached HTML for backend API docs
+_BACKEND_API_CACHE: Dict[str, object] = {"mtime": None, "html": ""}
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if DEFAULT_DATA_DIR.is_absolute():
@@ -146,6 +151,131 @@ def _read_csv_rows(target: Path) -> List[List[str]]:
             reader = csv.reader(f)
             rows = [row for row in reader]
     return rows
+
+
+def _format_inline_markdown(text: str) -> str:
+    result_parts: List[str] = []
+    last_index = 0
+    for match in re.finditer(r"`([^`]+)`", text):
+        result_parts.append(escape(text[last_index:match.start()]))
+        result_parts.append(f"<code>{escape(match.group(1))}</code>")
+        last_index = match.end()
+    result_parts.append(escape(text[last_index:]))
+    return "".join(result_parts)
+
+
+def _markdown_to_html(markdown: str) -> str:
+    lines = markdown.strip().splitlines()
+    html_lines: List[str] = []
+    in_ul = False
+    in_code = False
+    code_lines: List[str] = []
+    code_lang = ""
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            fence_lang = stripped[3:].strip()
+            if in_code:
+                code_html = escape("\n".join(code_lines))
+                lang_attr = f' class="language-{code_lang}"' if code_lang else ""
+                html_lines.append(f"<pre><code{lang_attr}>{code_html}</code></pre>")
+                code_lines = []
+                code_lang = ""
+                in_code = False
+            else:
+                in_code = True
+                code_lang = fence_lang
+            continue
+
+        if in_code:
+            code_lines.append(line)
+            continue
+
+        if stripped.startswith("### "):
+            if in_ul:
+                html_lines.append("</ul>")
+                in_ul = False
+            html_lines.append(f"<h3>{escape(stripped[4:].strip())}</h3>")
+            continue
+        if stripped.startswith("## "):
+            if in_ul:
+                html_lines.append("</ul>")
+                in_ul = False
+            html_lines.append(f"<h2>{escape(stripped[3:].strip())}</h2>")
+            continue
+
+        if stripped.startswith("- "):
+            if not in_ul:
+                html_lines.append("<ul>")
+                in_ul = True
+            content = _format_inline_markdown(stripped[2:].strip())
+            html_lines.append(f"<li>{content}</li>")
+            continue
+
+        if not stripped:
+            if in_ul:
+                html_lines.append("</ul>")
+                in_ul = False
+            html_lines.append("")
+            continue
+
+        if in_ul:
+            html_lines.append("</ul>")
+            in_ul = False
+
+        html_lines.append(f"<p>{_format_inline_markdown(stripped)}</p>")
+
+    if in_code:
+        code_html = escape("\n".join(code_lines))
+        lang_attr = f' class="language-{code_lang}"' if code_lang else ""
+        html_lines.append(f"<pre><code{lang_attr}>{code_html}</code></pre>")
+    if in_ul:
+        html_lines.append("</ul>")
+
+    cleaned: List[str] = []
+    previous_blank = False
+    for item in html_lines:
+        if not item.strip():
+            if not previous_blank:
+                cleaned.append("")
+            previous_blank = True
+        else:
+            cleaned.append(item)
+            previous_blank = False
+
+    return "\n".join(cleaned)
+
+
+def _load_backend_api_html() -> str:
+    doc_path = PROJECT_ROOT / "docs" / "SOFTWARE_SPEC.md"
+    try:
+        mtime = doc_path.stat().st_mtime
+    except FileNotFoundError:
+        return "<p>Backend API documentation not found.</p>"
+
+    if _BACKEND_API_CACHE.get("mtime") == mtime:
+        cached_html = _BACKEND_API_CACHE.get("html")
+        if isinstance(cached_html, str):
+            return cached_html
+
+    try:
+        content = doc_path.read_text(encoding="utf-8")
+    except Exception:
+        return "<p>Backend API documentation unavailable.</p>"
+
+    section_match = re.search(r"(## 8\. Backend API.*?)(?=\n## \d+\.)", content, re.S)
+    if not section_match:
+        html = "<p>Backend API documentation unavailable.</p>"
+    else:
+        section_markdown = section_match.group(1).strip()
+        html = _markdown_to_html(section_markdown)
+
+    _BACKEND_API_CACHE["mtime"] = mtime
+    _BACKEND_API_CACHE["html"] = html
+    return html
 
 
 def _unique_recycle_path(base: Path, name: str) -> Path:
@@ -448,8 +578,10 @@ def index() -> str:
 
     minimal_state = {
         "view": view_param,
+        "views": ["analytics", "reports", "compare", "api"],
         "selectedDataset": active_dataset or "",
         "datasetOptions": dataset_options,
+        "apiDocsHtml": _load_backend_api_html(),
         "endpoints": {
             "csv": url_for("api_csv"),
             "download": url_for("download_csv"),
@@ -1038,7 +1170,7 @@ def _build_box_from_stats(
 
 
 def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Dict[str, object]:
-    view_mode = active_view if active_view in {"analytics", "reports", "compare"} else "analytics"
+    view_mode = active_view if active_view in {"analytics", "reports", "compare", "api"} else "analytics"
     dataset_param = query_params.get("dataset")
     dataset_options = _available_datasets()
     active_dataset = dataset_param or DEFAULT_DATASET_NAME
@@ -1197,7 +1329,7 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
 
     state: Dict[str, object] = {
         "activeView": view_mode,
-        "views": ["analytics", "reports", "compare"],
+        "views": ["analytics", "reports", "compare", "api"],
         "datasetOptions": dataset_options,
         "selectedDataset": selected_dataset,
         "datasetWarnings": dataset_warnings,
@@ -1229,6 +1361,7 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
             },
         },
         "serviceOrder": service_order,
+        "apiDocsHtml": _load_backend_api_html(),
         "endpoints": {
             "csv": url_for("api_csv"),
             "download": url_for("download_csv"),
