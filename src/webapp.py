@@ -35,6 +35,7 @@ if DEFAULT_DATA_DIR.is_absolute():
     DATA_BASE_DIR = DEFAULT_DATA_DIR
 else:
     DATA_BASE_DIR = (PROJECT_ROOT / DEFAULT_DATA_DIR).resolve()
+RECYCLE_DIR = PROJECT_ROOT / "recycle"
 
 app = Flask(
     __name__,
@@ -146,6 +147,60 @@ def _read_csv_rows(target: Path) -> List[List[str]]:
             rows = [row for row in reader]
     return rows
 
+
+def _unique_recycle_path(base: Path, name: str) -> Path:
+    base.mkdir(parents=True, exist_ok=True)
+    candidate = base / name
+    if not candidate.exists():
+        return candidate
+    # Append numeric suffix to avoid collisions
+    idx = 1
+    while True:
+        alt = base / f"{name}-{idx}"
+        if not alt.exists():
+            return alt
+        idx += 1
+
+
+@app.post("/api/datasets/delete")
+def delete_dataset() -> Response:
+    dataset_name = (request.form.get("dataset") if request.form else None) or (
+        request.json.get("dataset") if request.is_json else None
+    )
+    if not dataset_name:
+        abort(400, "Missing 'dataset' in request.")
+
+    # Resolve source paths
+    data_src = DATA_BASE_DIR / dataset_name
+    result_src = RESULT_BASE_DIR / dataset_name
+
+    # Ensure something exists to delete
+    if not data_src.exists() and not result_src.exists():
+        abort(404, f"Dataset '{dataset_name}' not found.")
+
+    moved: Dict[str, str] = {}
+
+    # Move data folder
+    if data_src.exists():
+        data_recycle_base = RECYCLE_DIR / "data"
+        data_dest = _unique_recycle_path(data_recycle_base, dataset_name)
+        data_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(data_src), str(data_dest))
+        moved["data"] = str(data_dest)
+
+    # Move result folder
+    if result_src.exists():
+        result_recycle_base = RECYCLE_DIR / "result"
+        result_dest = _unique_recycle_path(result_recycle_base, dataset_name)
+        result_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(result_src), str(result_dest))
+        moved["result"] = str(result_dest)
+
+    return jsonify({
+        "dataset": dataset_name,
+        "moved": moved,
+        "message": "Dataset moved to recycle folder.",
+    })
 
 def _clean_component(component: str) -> str:
     cleaned = component.strip().strip("\\/")
@@ -367,6 +422,7 @@ def index() -> str:
             "dashboard": url_for("api_dashboard"),
             "analyticsBar": url_for("analytics_bardata"),
             "importDataset": url_for("import_dataset"),
+            "deleteDataset": url_for("delete_dataset"),
         },
     }
 
@@ -967,18 +1023,10 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
     report_paths = _list_csv_files_under(active_result_dir)
     report_files = [p.relative_to(active_result_dir).as_posix() for p in report_paths]
 
-    report_groups: Dict[str, List[str]] = {}
-    for rel_path in report_files:
-        parts = rel_path.split("/", 1)
-        if len(parts) > 1:
-            group = parts[0]
-        else:
-            group = dataset_label
-        report_groups.setdefault(group, []).append(rel_path)
-
-    for group_name in report_groups:
-        report_groups[group_name] = sorted(report_groups[group_name])
-    report_groups = dict(sorted(report_groups.items(), key=lambda item: item[0].casefold()))
+    # Group all CSVs under the selected dataset name as the single group label.
+    report_groups: Dict[str, List[str]] = {
+        dataset_label: sorted(report_files)
+    }
 
     selected_report_param = query_params.get("report")
     initial_report = (
@@ -1153,6 +1201,7 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
             "dashboard": url_for("api_dashboard"),
             "analyticsBar": url_for("analytics_bardata"),
             "importDataset": url_for("import_dataset"),
+            "deleteDataset": url_for("delete_dataset"),
         },
     }
     return state

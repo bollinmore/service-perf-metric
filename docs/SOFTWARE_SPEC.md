@@ -314,6 +314,7 @@ If data is insufficient, returns `warnings`/`error` and an empty figure.
   - discovered CSV files under the selected dataset root. 
   - A button located at the top-right corner allows user to import a new [dataset](#61-dataset).
   - Display the dataset name as the group name, and all CSV files should be under their respective groups; Display counts beside each group name and provide collapse/expand buttons.
+  - A button located at the top-right corner of each group allows the user to delete the dataset. The deleted dataset will be moved to the recycle folder.
 - Right pane: file title, dataset label, Download and Refresh buttons, table preview.
 
 ### 10.4 Compare View

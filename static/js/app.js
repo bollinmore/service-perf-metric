@@ -370,6 +370,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
     const csvEndpoint = endpoints.csv || "/api/csv";
     const downloadEndpoint = endpoints.download || "/download";
     const importEndpoint = endpoints.importDataset || "/api/datasets/import";
+    const deleteEndpoint = endpoints.deleteDataset || "/api/datasets/delete";
 
     const datasetOptions = useMemo(() => {
       const opts = [...(state.datasetOptions || [])];
@@ -779,17 +780,18 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
           ${reportGroups.length
             ? reportGroups.map(([groupName, files]) =>
                 html`<div key=${`group-${groupName}`} className="space-y-2">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-gray-500 transition hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                onClick=${() =>
-                  setCollapsedGroups((prev) => ({
-                    ...prev,
-                    [groupName]: !prev[groupName],
-                  }))}
-              >
-                <span>${groupName}</span>
-                <span className="flex items-center gap-2">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-gray-500 transition hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  title="Expand/Collapse"
+                  onClick=${() =>
+                    setCollapsedGroups((prev) => ({
+                      ...prev,
+                      [groupName]: !prev[groupName],
+                    }))}
+                >
+                  <span>${groupName}</span>
                   <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
                     ${files.length}
                   </span>
@@ -808,8 +810,67 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
                   >
                     <path d="M6 8l4 4 4-4" />
                   </svg>
-                </span>
-              </button>
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-gray-200 bg-white p-1 text-gray-500 shadow-sm transition hover:border-rose-300 hover:text-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-300"
+                  title="Delete Dataset"
+                  aria-label="Delete Dataset"
+                  onClick=${async () => {
+                    const datasetName = state.selectedDataset || groupName;
+                    if (!datasetName) return;
+                    const ok = window.confirm(`Move dataset '${datasetName}' to recycle folder?`);
+                    if (!ok) return;
+                    try {
+                      const form = new FormData();
+                      form.append("dataset", datasetName);
+                      const resp = await fetch(deleteEndpoint, { method: "POST", body: form });
+                      if (!resp.ok) {
+                        let msg = `Failed to delete dataset (status ${resp.status}).`;
+                        try {
+                          const data = await resp.clone().json();
+                          msg = data?.message || data?.error || msg;
+                        } catch {}
+                        if (resp.status === 404) {
+                          msg = `${msg} It may have already been removed. Try refreshing, switch to another dataset, or check the 'data/' and 'result/' folders.`;
+                        }
+                        alert(msg);
+                        return;
+                      }
+                      // Optimistic UI update so the left list reflects removal immediately
+                      setState((prev) => ({
+                        ...prev,
+                        datasetOptions: (prev.datasetOptions || []).filter((d) => d !== datasetName),
+                        selectedDataset: prev.selectedDataset === datasetName ? "" : prev.selectedDataset,
+                        reports: prev.selectedDataset === datasetName
+                          ? { files: [], groups: {}, initial: "" }
+                          : prev.reports,
+                      }));
+                      // Then reload from server to re-sync
+                      await loadState({ view: "reports", dataset: state.selectedDataset === datasetName ? "" : state.selectedDataset });
+                      setImportFeedback({ error: "", success: `Dataset '${datasetName}' moved to recycle.` });
+                    } catch (e) {
+                      alert(e?.message || "Failed to delete dataset.");
+                    }
+                  }}
+                >
+                  <svg
+                    className="h-3.5 w-3.5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4h8v2" />
+                    <path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" />
+                    <path d="M10 11v6M14 11v6" />
+                  </svg>
+                </button>
+              </div>
               ${collapsedGroups[groupName]
                 ? null
                 : html`<div className="space-y-2">
