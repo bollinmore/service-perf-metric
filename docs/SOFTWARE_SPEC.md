@@ -281,6 +281,26 @@ Notes:
 Response (when valid): `{"figure": {"data": [...], "layout": {...}}, "dataset": "...", "warnings": [...], "error": null}`.
 If data is insufficient, returns `warnings`/`error` and an empty figure.
 
+### 8.7 `POST /api/datasets/import`
+
+- Purpose: Import a dataset from a ZIP file or a folder upload and generate reports.
+- Form fields (either option works):
+  - ZIP upload:
+    - `file`: a `.zip` archive of the dataset
+    - `datasetName` (optional): name to use for `data/<datasetName>`
+  - Folder upload (multi-file):
+    - `folder`: multiple files with relative paths (e.g., `myData/2.0.1.0/PerformanceLog/x.log`)
+    - `datasetName` (optional): overrides inferred name
+- Validation: dataset must contain at least three version folders; each version must contain a `PerformanceLog` directory (can be nested). On success, files are moved to `data/<dataset>/` and reports are generated under `result/<dataset>/`.
+- Success response: `201` with JSON `{ "dataset": "<name>", "message": "Dataset imported successfully." }`
+- Error responses: `400` invalid upload/structure, `409` dataset already exists, `500` server error.
+
+Example (ZIP):
+
+```
+curl -F "file=@/path/to/myData.zip" -F "datasetName=myData" http://localhost:8000/api/datasets/import
+```
+
 ## 9. Data Quality Rules
 
 - Total unique services should equal 24; otherwise produce a warning.
