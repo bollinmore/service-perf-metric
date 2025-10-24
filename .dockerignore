@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+result/
+recycle/
+node_modules/
+dist/
+build/
+*.DS_Store
+*.swp
+

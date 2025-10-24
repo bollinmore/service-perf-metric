@@ -396,3 +396,73 @@ docs/images/
   csv-viewer.png
   compare.png
 ```
+
+## 16. Containerization
+
+### 16.1 Build Image
+
+- Build a local Docker image from the project root:
+
+```
+docker build -t spm-app:latest .
+```
+
+### 16.2 Run Container (simple)
+
+- Start the app on port 8000 (maps host ./data, ./result, and ./recycle into the container):
+
+```
+docker run --rm -it \
+  -p 8000:8000 \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/result:/app/result" \
+  -v "$PWD/recycle:/app/recycle" \
+  --name spm spm-app:latest
+```
+
+- Access UI at `http://localhost:8000/`.
+
+### 16.3 docker-compose
+
+- A `docker-compose.yml` is included. Bring the stack up with:
+
+```
+docker compose up --build
+```
+
+- Default ports: `8000:8000`. Data and results are persisted via bind mounts.
+
+### 16.4 Environment Variables
+
+- `SPM_DEFAULT_DATASET` (optional): default dataset name shown in the UI dropdown.
+- `SPM_RESULT_BASE` (optional): base directory that contains datasets in results (default `/app/result`).
+- `SPM_RESULT_ROOT` (optional): active dataset result root (default `/app/result/<dataset>`; set by the server).
+
+### 16.5 Data Workflow in Containers
+
+- To pre-seed raw logs, place them on the host under `./data/<version>/PerformanceLog` before starting the container. The app will parse and generate reports on first run.
+- Alternatively, upload datasets at runtime via the UI “Import Dataset” button or the API:
+
+```
+curl -F "file=@/path/to/myData.zip" -F "datasetName=myData" http://localhost:8000/api/datasets/import
+```
+
+- Generated artifacts are written to `./result/<dataset>/`. Deleting a dataset via the UI moves its data and results under `./recycle/`.
+
+### 16.6 Makefile Shortcuts
+
+- Build image: `make build` (override `IMAGE=spm-app:dev` if needed)
+- Run container: `make run` (override `PORT=8080`, `NAME=spm`)
+- Stop container: `make stop`
+- Tail logs: `make logs`
+- Compose up/down: `make compose-up` / `make compose-down`
+- Open shell in container image: `make shell`
+
+### 16.7 CI Image Publishing
+
+- GitHub Actions workflow builds and publishes a Docker image to GitHub Container Registry (GHCR) on Git tags starting with `v`.
+- Tags produced:
+  - `ghcr.io/<owner>/<repo>:<tag>` (e.g., `v1.2.3`)
+  - `ghcr.io/<owner>/<repo>:latest`
+- Trigger: push a tag like `v1.0.0`.
+- Location of workflow: `.github/workflows/docker-image.yml`.
