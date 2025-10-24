@@ -359,12 +359,16 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
     const [loading, setLoading] = useState(false);
     const [loadError, setLoadError] = useState("");
     const [reloadToken, setReloadToken] = useState(0);
+    const [importingDataset, setImportingDataset] = useState(false);
+    const [importFeedback, setImportFeedback] = useState({ error: "", success: "" });
+    const folderInputRef = useRef(null);
     const initialFetchRef = useRef(false);
 
     const endpoints = state.endpoints || initial.endpoints || {};
     const dashboardEndpoint = endpoints.dashboard || "/api/dashboard";
     const csvEndpoint = endpoints.csv || "/api/csv";
     const downloadEndpoint = endpoints.download || "/download";
+    const importEndpoint = endpoints.importDataset || "/api/datasets/import";
 
     const datasetOptions = useMemo(() => {
       const opts = [...(state.datasetOptions || [])];
@@ -476,6 +480,121 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       loadState(overrides);
     }, [initial.versions, initialDatasetState, initialViewState, loadState]);
 
+    const handleDatasetImport = useCallback(
+      async (event) => {
+        const input = event.target;
+        const files = input?.files;
+        if (!files || !files.length || importingDataset) {
+          if (input) {
+            input.value = "";
+          }
+          return;
+        }
+
+        setImportingDataset(true);
+        setImportFeedback({ error: "", success: "" });
+
+        try {
+          const fileArray = Array.from(files);
+          const relativePaths = fileArray.map((file) => file.webkitRelativePath || file.name);
+          const topLevels = Array.from(
+            new Set(
+              relativePaths
+                .map((path) => (path || "").split(/[\\/]/)[0])
+                .filter(Boolean)
+            )
+          );
+
+          let datasetName = topLevels.length === 1 ? topLevels[0] : "";
+          if (!datasetName) {
+            const proposed = `dataset-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+            datasetName = window.prompt("Enter a name for this dataset", proposed) || "";
+          } else if (topLevels.length > 1) {
+            const proposed = `dataset-${new Date().toISOString().split("T")[0]}`;
+            const userInput = window.prompt(
+              "Multiple top-level folders detected. Enter a dataset name to use",
+              datasetName || proposed
+            );
+            datasetName = (userInput || datasetName || proposed).trim();
+          }
+
+          if (!datasetName) {
+            setImportingDataset(false);
+            setImportFeedback({ error: "Dataset import cancelled (missing name).", success: "" });
+            if (input) {
+              input.value = "";
+            }
+            return;
+          }
+
+          const formData = new FormData();
+          formData.append("datasetName", datasetName);
+          fileArray.forEach((file) => {
+            const relative = file.webkitRelativePath || file.name;
+            formData.append("folder", file, relative);
+          });
+
+          const response = await fetch(importEndpoint, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            let message = `Failed to import dataset (status ${response.status}).`;
+            try {
+              const data = await response.clone().json();
+              if (data && typeof data === "object") {
+                message = data.message || data.error || message;
+              }
+            } catch (jsonError) {
+              try {
+                const text = await response.text();
+                if (text) {
+                  const trimmed = text.trim();
+                  message = trimmed.startsWith("<") ? message : trimmed;
+                }
+              } catch (textError) {
+                console.warn("Failed to read import error payload", textError);
+              }
+            }
+            throw new Error(message);
+          }
+
+          const payload = await response.json();
+          const importedName = payload?.dataset || datasetName;
+          const overrides = { view: "reports" };
+          if (importedName) {
+            overrides.dataset = importedName;
+          }
+          await loadState(overrides);
+          setImportFeedback({
+            error: "",
+            success: payload?.message || "Dataset imported successfully.",
+          });
+        } catch (error) {
+          setImportFeedback({
+            success: "",
+            error:
+              error instanceof Error && error.message
+                ? error.message
+                : "Failed to import dataset.",
+          });
+        } finally {
+          setImportingDataset(false);
+          if (input) {
+            input.value = "";
+          }
+        }
+      },
+      [importEndpoint, loadState, importingDataset]
+    );
+
+    useEffect(() => {
+      if (view !== "reports" && (importFeedback.error || importFeedback.success)) {
+        setImportFeedback({ error: "", success: "" });
+      }
+    }, [importFeedback.error, importFeedback.success, view]);
+
     const loadReport = useCallback(async () => {
       if (!report) {
         setReportContent({ headers: [], rows: [], loading: false, error: "" });
@@ -561,11 +680,68 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
     />`;
 
   const reportsPanel = html`<div className="flex h-[calc(100vh-6rem)] gap-6">
-      <aside className="w-64 flex-shrink-0 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="border-b border-gray-200 px-4 py-3 text-sm font-semibold uppercase tracking-wide text-gray-600">
-          CSV Files
+      <aside className="flex w-64 flex-shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-3">
+          <span className="text-sm font-semibold uppercase tracking-wide text-gray-600">
+            CSV Files
+          </span>
+          <div>
+            <input
+              ref=${folderInputRef}
+              type="file"
+              multiple
+              webkitdirectory=""
+              mozdirectory=""
+              directory=""
+              className="hidden"
+              onChange=${handleDatasetImport}
+            />
+            <button
+              type="button"
+              className=${classNames(
+                "rounded-full border border-gray-200 bg-white p-2 text-gray-600 shadow-sm transition hover:border-indigo-400 hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-300",
+                importingDataset ? "cursor-not-allowed opacity-60" : ""
+              )}
+              title=${importingDataset ? "Importing dataset..." : "Import Dataset"}
+              aria-label="Import Dataset"
+              disabled=${importingDataset}
+              onClick=${() => {
+                if (!importingDataset && folderInputRef.current) {
+                  folderInputRef.current.click();
+                }
+              }}
+            >
+              <span className="sr-only">Import Dataset</span>
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 4v12" />
+                <path d="M8 8l4-4 4 4" />
+                <path d="M5 20h14" />
+              </svg>
+            </button>
+          </div>
         </div>
-        <div className="h-[calc(100%-3rem)] space-y-2 overflow-y-auto px-4 py-3">
+        ${importFeedback.error || importFeedback.success
+          ? html`<div
+              className=${classNames(
+                "px-4 py-2 text-xs",
+                importFeedback.error
+                  ? "bg-rose-50 text-rose-700"
+                  : "bg-emerald-50 text-emerald-700"
+              )}
+            >
+              ${importFeedback.error || importFeedback.success}
+            </div>`
+          : null}
+        <div className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
           ${(state.reports?.files || []).map((file) => {
             const active = file === report;
             return html`<button

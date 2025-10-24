@@ -4,13 +4,17 @@ import argparse
 import csv
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
+import zipfile
 
 import pandas as pd
 import plotly.graph_objects as go
 from flask import (
     Flask,
+    Response,
     abort,
     jsonify,
     redirect,
@@ -21,8 +25,13 @@ from flask import (
     url_for,
 )
 
+from werkzeug.utils import secure_filename
+
+from spm import generate_reports
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+UPLOAD_ROOT = PROJECT_ROOT / "uploads"
 
 app = Flask(
     __name__,
@@ -135,6 +144,201 @@ def _read_csv_rows(target: Path) -> List[List[str]]:
     return rows
 
 
+def _clean_component(component: str) -> str:
+    cleaned = component.strip().strip("\\/")
+    if cleaned in {"", ".", ".."}:
+        raise ValueError("Invalid path component in uploaded folder.")
+    if "/" in cleaned or "\\" in cleaned:
+        raise ValueError("Invalid path component in uploaded folder.")
+    return cleaned
+
+
+def _validate_import_candidate(dataset_root: Path) -> None:
+    if not dataset_root.exists() or not dataset_root.is_dir():
+        raise ValueError("Dataset folder is missing inside the archive.")
+
+    version_dirs: List[Path] = []
+    for child in dataset_root.iterdir():
+        if not child.is_dir():
+            continue
+        if child.name.startswith(".") or child.name == "__MACOSX":
+            continue
+        version_dirs.append(child)
+
+    if len(version_dirs) < 3:
+        raise ValueError("Dataset must contain at least three version folders.")
+
+    for version_dir in version_dirs:
+        performance_logs = [
+            child
+            for child in version_dir.iterdir()
+            if child.is_dir() and child.name == "PerformanceLog"
+        ]
+        if not performance_logs:
+            raise ValueError(
+                f"Version '{version_dir.name}' is missing a PerformanceLog directory."
+            )
+
+
+def _handle_zip_upload(file_storage, tmp_path: Path) -> Tuple[str, Path]:
+    archive_name = secure_filename(file_storage.filename or "")
+    if not archive_name or not archive_name.lower().endswith(".zip"):
+        abort(400, "Dataset archive must be a .zip file.")
+
+    archive_path = tmp_path / archive_name
+    file_storage.save(archive_path)
+
+    raw_name: str | None = None
+    dataset_name: str | None = None
+    try:
+        with zipfile.ZipFile(archive_path) as zf:
+            members = [name for name in zf.namelist() if name and not name.endswith("/")]
+            if not members:
+                abort(400, "Dataset archive is empty.")
+            top_levels = {Path(name).parts[0] for name in members if Path(name).parts}
+            if not top_levels:
+                abort(400, "Dataset archive must contain a dataset folder.")
+            if len(top_levels) > 1:
+                abort(400, "Dataset archive must contain a single dataset folder.")
+            raw_name = next(iter(top_levels))
+            dataset_name = secure_filename(raw_name)
+            if not dataset_name:
+                abort(400, "Dataset name is invalid.")
+            zf.extractall(tmp_path)
+    except zipfile.BadZipFile:
+        abort(400, "Invalid ZIP archive.")
+
+    if raw_name is None or dataset_name is None:
+        abort(400, "Dataset archive is malformed.")
+
+    extracted_root = tmp_path / raw_name
+    if dataset_name != raw_name:
+        sanitized_root = tmp_path / dataset_name
+        if sanitized_root.exists():
+            shutil.rmtree(sanitized_root)
+        extracted_root.rename(sanitized_root)
+        extracted_root = sanitized_root
+
+    return dataset_name, extracted_root
+
+
+def _handle_folder_upload(files: List, tmp_path: Path, provided_name: str | None) -> Tuple[str, Path]:
+    dataset_name: str | None = None
+    if provided_name:
+        dataset_name = secure_filename(provided_name)
+        if not dataset_name:
+            raise ValueError("Dataset name is invalid.")
+
+    saved_any = False
+
+    for storage in files:
+        filename = storage.filename or ""
+        if not filename:
+            continue
+        rel_path = Path(filename.replace("\\", "/"))
+        parts = [part for part in rel_path.parts if part and part not in {".", ".."}]
+        if not parts:
+            continue
+
+        if dataset_name is None:
+            candidate_name = secure_filename(parts[0])
+            if not candidate_name:
+                raise ValueError("Dataset name is invalid.")
+            dataset_name = candidate_name
+
+        safe_parts = [dataset_name]
+
+        remaining_parts = parts
+        if parts and secure_filename(parts[0]) == dataset_name:
+            remaining_parts = parts[1:]
+
+        for component in remaining_parts:
+            try:
+                safe_parts.append(_clean_component(component))
+            except ValueError:
+                raise ValueError("Detected invalid path inside uploaded folder.") from None
+
+        if len(safe_parts) == 1:
+            continue
+
+        destination = tmp_path.joinpath(*safe_parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        storage.save(destination)
+        saved_any = True
+
+    if dataset_name is None or not saved_any:
+        raise ValueError("Uploaded folder did not contain any files.")
+
+    extracted_root = tmp_path / dataset_name
+    if not extracted_root.exists():
+        raise ValueError("Uploaded folder did not contain any files.")
+
+    return dataset_name, extracted_root
+
+
+@app.post("/api/datasets/import")
+def import_dataset() -> Tuple[Response, int]:
+    file_storage = request.files.get("file")
+    folder_files = request.files.getlist("folder")
+    provided_name = request.form.get("datasetName") if request.form else None
+
+    dataset_name: str | None = None
+    upload_root: Path | None = None
+    result_root: Path | None = None
+    extracted_root: Path | None = None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+
+        if file_storage and file_storage.filename:
+            dataset_name, extracted_root = _handle_zip_upload(file_storage, tmp_path)
+        elif folder_files:
+            try:
+                dataset_name, extracted_root = _handle_folder_upload(
+                    folder_files, tmp_path, provided_name
+                )
+            except ValueError as exc:
+                abort(400, str(exc))
+        else:
+            abort(400, "Missing dataset archive or folder.")
+
+        if extracted_root is None or dataset_name is None:
+            abort(500, "Failed to process uploaded dataset.")
+
+        try:
+            _validate_import_candidate(extracted_root)
+        except ValueError as exc:
+            abort(400, str(exc))
+
+        upload_root = UPLOAD_ROOT / dataset_name
+        result_root = RESULT_BASE_DIR / dataset_name
+
+        if upload_root.exists() or result_root.exists():
+            abort(409, f"Dataset '{dataset_name}' already exists.")
+
+        upload_root.parent.mkdir(parents=True, exist_ok=True)
+        RESULT_BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+        shutil.move(str(extracted_root), upload_root)
+
+    if upload_root is None or result_root is None:
+        abort(500, "Failed to process uploaded dataset.")
+
+    try:
+        generate_reports(upload_root, result_root)
+    except Exception as exc:  # pragma: no cover - defensive cleanup
+        if upload_root and upload_root.exists():
+            shutil.rmtree(upload_root, ignore_errors=True)
+        if result_root and result_root.exists():
+            shutil.rmtree(result_root, ignore_errors=True)
+        abort(500, f"Failed to process dataset: {exc}")
+
+    return (
+        jsonify({"dataset": dataset_name, "message": "Dataset imported successfully."}),
+        201,
+    )
+
+
 @app.route("/")
 def index() -> str:
     view_param = request.args.get("view", "analytics")
@@ -159,6 +363,7 @@ def index() -> str:
             "download": url_for("download_csv"),
             "dashboard": url_for("api_dashboard"),
             "analyticsBar": url_for("analytics_bardata"),
+            "importDataset": url_for("import_dataset"),
         },
     }
 
@@ -927,6 +1132,7 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
             "download": url_for("download_csv"),
             "dashboard": url_for("api_dashboard"),
             "analyticsBar": url_for("analytics_bardata"),
+            "importDataset": url_for("import_dataset"),
         },
     }
     return state
