@@ -76,7 +76,14 @@ Environment variables (normally set by `spm.py serve`):
 
 ## 6. Data Model & File Formats
 
-### 6.1 Input Logs
+### 6.1 Dataset
+
+A Dataset is the input root used for processing. It must satisfy both of the following:
+
+- It contains three version subdirectories under the dataset root (for example: `<root>/<versionA>`, `<root>/<versionB>`, `<root>/<versionC>`).
+- Each version subdirectory contains at least one `PerformanceLog` directory.
+
+### 6.2 Input Logs
 
 - Location: `data/<version>/PerformanceLog/`
 - Preferred file pattern: `*loading.log` (fallback to `*.log`)
@@ -86,7 +93,7 @@ Environment variables (normally set by `spm.py serve`):
 ^HH:MM:SS.mmm\s+(SERVICE_NAME)\s+-\s+(loading_time|elapsed):\s+(NUMBER)\s+ms
 ```
 
-### 6.2 Per-Version Summary (raw) — `InQuire_*/summary.csv`
+### 6.3 Per-Version Summary (raw) — `InQuire_*/summary.csv`
 
 ```
 service,loading_time_ms
@@ -96,7 +103,7 @@ Service A,1100
 ...
 ```
 
-### 6.3 Combined Summary — `summary.csv`
+### 6.4 Combined Summary — `summary.csv`
 
 - Columns: `service,<version1>,<version2>,...`
 - Rows: same service can appear across multiple rows to preserve multiple samples per version (blank where no sample at that row index).
@@ -111,7 +118,7 @@ Service B,845,860,
 ...
 ```
 
-### 6.4 Overall Stats — `summary_stats.csv`
+### 6.5 Overall Stats — `summary_stats.csv`
 
 ```
 metric,2.0.1.0,2.0.1.2,2.0.1.3
@@ -121,7 +128,7 @@ Min,300,320,310
 Median,990,980,950
 ```
 
-### 6.5 Per-Service Stats — `service_stats.csv`
+### 6.6 Per-Service Stats — `service_stats.csv`
 
 ```
 service,2.0.1.0_avg,2.0.1.0_max,2.0.1.0_min,2.0.1.0_median,2.0.1.2_avg,...
@@ -130,7 +137,7 @@ Service B,900,1950,350,870,905,...
 ...
 ```
 
-### 6.6 Exclusions
+### 6.7 Exclusions
 
 The following service names are excluded from analytics and stats:
 
@@ -279,7 +286,7 @@ If data is insufficient, returns `warnings`/`error` and an empty figure.
 - Total unique services should equal 24; otherwise produce a warning.
 - Must contain a service named `AUTO TEST` (case-insensitive match by equality after normalization); otherwise return an error.
 - Sample count per service should match `AUTO TEST`; mismatches listed as warnings.
-- Excluded services (see 6.6) are filtered out before analytics.
+- Excluded services (see 6.7) are filtered out before analytics.
 
 ## 10. Frontend UI Specification
 
@@ -302,7 +309,9 @@ If data is insufficient, returns `warnings`/`error` and an empty figure.
 
 ### 10.3 CSV Viewer
 
-- Left list: discovered CSV files under the selected dataset root.
+- Left list: 
+  - discovered CSV files under the selected dataset root.
+  - A button located at the top-right corner allows user to import a new dataset
 - Right pane: file title, dataset label, Download and Refresh buttons, table preview.
 
 ### 10.4 Compare View
@@ -364,4 +373,3 @@ docs/images/
   csv-viewer.png
   compare.png
 ```
-
