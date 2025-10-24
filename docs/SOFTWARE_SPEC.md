@@ -311,7 +311,7 @@ If data is insufficient, returns `warnings`/`error` and an empty figure.
 
 - Left list: 
   - discovered CSV files under the selected dataset root.
-  - A button located at the top-right corner allows user to import a new dataset
+  - A button located at the top-right corner allows user to import a new [dataset](#61-dataset).
 - Right pane: file title, dataset label, Download and Refresh buttons, table preview.
 
 ### 10.4 Compare View
