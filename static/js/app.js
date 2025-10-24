@@ -687,7 +687,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       }}
     />`;
 
-  const reportsPanel = html`<div className="flex h-[calc(100vh-6rem)] gap-6">
+  const reportsPanel = html`<div className="flex h-[calc(100vh-6rem)] gap-6 overflow-hidden">
       <aside className="flex w-64 flex-shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-3">
           <span className="text-sm font-semibold uppercase tracking-wide text-gray-600">
@@ -803,7 +803,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
               : null}
           </div>
         </header>
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-auto">
           ${reportContent.loading
             ? html`<div className="flex h-full items-center justify-center text-sm text-gray-500">
                 Loading CSV data...
@@ -817,7 +817,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
           ${!reportContent.loading &&
           !reportContent.error &&
           reportContent.headers.length
-            ? html`<div className="max-h-[70vh] overflow-auto">
+            ? html`<div className="min-h-full">
                 <table className="min-w-full divide-y divide-gray-200 text-xs sm:text-sm">
                   <thead className="bg-gray-50">
                     <tr>
