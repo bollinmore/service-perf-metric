@@ -310,8 +310,10 @@ If data is insufficient, returns `warnings`/`error` and an empty figure.
 ### 10.3 CSV Viewer
 
 - Left list: 
-  - discovered CSV files under the selected dataset root.
+  - This list is always visible even when the user scrolls in the right pane. 
+  - discovered CSV files under the selected dataset root. 
   - A button located at the top-right corner allows user to import a new [dataset](#61-dataset).
+  - Display the dataset name as the group name, and all CSV files should be under their respective groups; Display counts beside each group name and provide collapse/expand buttons.
 - Right pane: file title, dataset label, Download and Refresh buttons, table preview.
 
 ### 10.4 Compare View

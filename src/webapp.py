@@ -957,19 +957,35 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
 
     active_result_dir = _result_dir_for_dataset(active_dataset)
 
+    if active_dataset and active_dataset not in dataset_options:
+        dataset_options = sorted(set(dataset_options + [active_dataset]))
+
+    selected_dataset = active_dataset or ""
+
+    dataset_label = selected_dataset or "Current Dataset"
+
     report_paths = _list_csv_files_under(active_result_dir)
     report_files = [p.relative_to(active_result_dir).as_posix() for p in report_paths]
+
+    report_groups: Dict[str, List[str]] = {}
+    for rel_path in report_files:
+        parts = rel_path.split("/", 1)
+        if len(parts) > 1:
+            group = parts[0]
+        else:
+            group = dataset_label
+        report_groups.setdefault(group, []).append(rel_path)
+
+    for group_name in report_groups:
+        report_groups[group_name] = sorted(report_groups[group_name])
+    report_groups = dict(sorted(report_groups.items(), key=lambda item: item[0].casefold()))
+
     selected_report_param = query_params.get("report")
     initial_report = (
         selected_report_param
         if selected_report_param and selected_report_param in report_files
         else (report_files[0] if report_files else "")
     )
-
-    if active_dataset and active_dataset not in dataset_options:
-        dataset_options = sorted(set(dataset_options + [active_dataset]))
-
-    selected_dataset = active_dataset or ""
 
     df, version_cols, melted, service_order = _prepare_summary(active_result_dir)
     stats_df, stats_versions = _load_service_stats(active_result_dir)
@@ -1118,6 +1134,7 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
         "barFigure": bar_fig_payload,
         "reports": {
             "files": report_files,
+            "groups": report_groups,
             "initial": initial_report,
         },
         "compare": {

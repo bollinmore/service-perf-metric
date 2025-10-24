@@ -362,6 +362,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
     const [importingDataset, setImportingDataset] = useState(false);
     const [importFeedback, setImportFeedback] = useState({ error: "", success: "" });
     const folderInputRef = useRef(null);
+    const [collapsedGroups, setCollapsedGroups] = useState({});
     const initialFetchRef = useRef(false);
 
     const endpoints = state.endpoints || initial.endpoints || {};
@@ -678,6 +679,31 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
         .filter(Boolean);
     }, [state.compare, compare]);
 
+    const reportGroups = useMemo(() => {
+      const groups = state.reports?.groups;
+      if (groups && Object.keys(groups).length) {
+        return Object.entries(groups);
+      }
+      const files = state.reports?.files || [];
+      if (!files.length) {
+        return [];
+      }
+      const label = state.selectedDataset || "Current Dataset";
+      return [[label, files]];
+    }, [state.reports, state.selectedDataset]);
+
+    useEffect(() => {
+      setCollapsedGroups((prev) => {
+        const next = {};
+        reportGroups.forEach(([name]) => {
+          next[name] = Object.prototype.hasOwnProperty.call(prev, name)
+            ? prev[name]
+            : false;
+        });
+        return next;
+      });
+    }, [reportGroups]);
+
     const analyticsView = html`<${AnalyticsPanel}
       state=${state}
       version=${version}
@@ -749,26 +775,67 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
               ${importFeedback.error || importFeedback.success}
             </div>`
           : null}
-        <div className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
-          ${(state.reports?.files || []).map((file) => {
-            const active = file === report;
-            return html`<button
-              key=${file}
-              type="button"
-              className=${classNames(
-                "w-full rounded-md border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-indigo-300",
-                active
-                  ? "border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm"
-                  : "border-gray-200 bg-white text-gray-700 hover:border-indigo-300 hover:text-indigo-600"
-              )}
-              onClick=${() => {
-                setReport(file);
-                updateUrl({ report: file });
-              }}
-            >
-              ${file}
-            </button>`;
-          })}
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          ${reportGroups.length
+            ? reportGroups.map(([groupName, files]) =>
+                html`<div key=${`group-${groupName}`} className="space-y-2">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-gray-500 transition hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                onClick=${() =>
+                  setCollapsedGroups((prev) => ({
+                    ...prev,
+                    [groupName]: !prev[groupName],
+                  }))}
+              >
+                <span>${groupName}</span>
+                <span className="flex items-center gap-2">
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+                    ${files.length}
+                  </span>
+                  <svg
+                    className=${classNames(
+                      "h-3 w-3 transition-transform",
+                      collapsedGroups[groupName] ? "-rotate-90" : "rotate-0"
+                    )}
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M6 8l4 4 4-4" />
+                  </svg>
+                </span>
+              </button>
+              ${collapsedGroups[groupName]
+                ? null
+                : html`<div className="space-y-2">
+                    ${files.map((file) => {
+                      const active = file === report;
+                      return html`<button
+                        key=${`${groupName}-${file}`}
+                        type="button"
+                        className=${classNames(
+                          "w-full rounded-md border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-indigo-300",
+                          active
+                            ? "border-indigo-500 bg-indigo-50 text-indigo-700 shadow-sm"
+                            : "border-gray-200 bg-white text-gray-700 hover:border-indigo-300 hover:text-indigo-600"
+                        )}
+                        onClick=${() => {
+                          setReport(file);
+                          updateUrl({ report: file });
+                        }}
+                      >
+                        ${file}
+                      </button>`;
+                    })}
+                  </div>`}
+            </div>`
+              )
+            : html`<div className="text-sm text-gray-500">No CSV files available.</div>`}
         </div>
       </aside>
       <section className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
