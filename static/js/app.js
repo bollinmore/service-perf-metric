@@ -362,6 +362,8 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
     const [importingDataset, setImportingDataset] = useState(false);
     const [importFeedback, setImportFeedback] = useState({ error: "", success: "" });
     const folderInputRef = useRef(null);
+    const zipInputRef = useRef(null);
+    const [showImportMenu, setShowImportMenu] = useState(false);
     const [collapsedGroups, setCollapsedGroups] = useState({});
     const initialFetchRef = useRef(false);
 
@@ -599,6 +601,77 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       [importEndpoint, loadState, importingDataset]
     );
 
+    const handleZipImport = useCallback(
+      async (event) => {
+        const input = event.target;
+        const file = input?.files?.[0];
+        if (!file || importingDataset) {
+          if (input) input.value = "";
+          return;
+        }
+
+        // Ask for datasetName (fallback to zip name without extension)
+        const defaultName = (file.name || "").replace(/\.zip$/i, "");
+        const name = window.prompt("Enter a dataset name", defaultName) || defaultName;
+        if (!name) {
+          if (input) input.value = "";
+          return;
+        }
+
+        setImportingDataset(true);
+        setImportFeedback({ error: "", success: "" });
+        setShowImportMenu(false);
+
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("datasetName", name);
+          const response = await fetch(importEndpoint, { method: "POST", body: formData });
+          if (!response.ok) {
+            let message = `Failed to import dataset (status ${response.status}).`;
+            try {
+              const data = await response.clone().json();
+              if (data && typeof data === "object") {
+                message = data.message || data.error || message;
+              }
+            } catch (jsonError) {
+              try {
+                const text = await response.text();
+                if (text) {
+                  const trimmed = text.trim();
+                  message = trimmed.startsWith("<") ? message : trimmed;
+                }
+              } catch {}
+            }
+            if (response.status === 409) {
+              const guidance = `Dataset '${name}' already exists. Rename the new dataset or remove the existing folder under 'data/${name}' before importing again.`;
+              message = `${message} ${guidance}`.trim();
+            } else if (response.status === 400) {
+              const guidance =
+                "Import expects either a dataset folder (use the folder picker) or a ZIP that contains the dataset root with at least three version folders, each holding a PerformanceLog directory. Please pick a valid dataset and try again.";
+              message = `${message} ${guidance}`.trim();
+            }
+            throw new Error(message);
+          }
+
+          const payload = await response.json();
+          const importedName = payload?.dataset || name;
+          const overrides = { view: "reports", dataset: importedName };
+          await loadState(overrides);
+          setImportFeedback({ error: "", success: payload?.message || "Dataset imported successfully." });
+        } catch (error) {
+          setImportFeedback({
+            success: "",
+            error: error instanceof Error && error.message ? error.message : "Failed to import dataset.",
+          });
+        } finally {
+          setImportingDataset(false);
+          if (input) input.value = "";
+        }
+      },
+      [importEndpoint, loadState, importingDataset]
+    );
+
     useEffect(() => {
       if (view !== "reports" && (importFeedback.error || importFeedback.success)) {
         setImportFeedback({ error: "", success: "" });
@@ -714,13 +787,13 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       }}
     />`;
 
-  const reportsPanel = html`<div className="flex h-[calc(100vh-6rem)] gap-6 overflow-hidden">
-      <aside className="flex w-64 flex-shrink-0 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+  const reportsPanel = html`<div className="flex h-[calc(100vh-6rem)] gap-6 overflow-visible">
+      <aside className="flex w-64 flex-shrink-0 flex-col overflow-visible rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-3">
           <span className="text-sm font-semibold uppercase tracking-wide text-gray-600">
             CSV Files
           </span>
-          <div>
+          <div className="relative">
             <input
               ref=${folderInputRef}
               type="file"
@@ -731,6 +804,13 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
               className="hidden"
               onChange=${handleDatasetImport}
             />
+            <input
+              ref=${zipInputRef}
+              type="file"
+              accept=".zip"
+              className="hidden"
+              onChange=${handleZipImport}
+            />
             <button
               type="button"
               className=${classNames(
@@ -740,11 +820,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
               title=${importingDataset ? "Importing dataset..." : "Import Dataset"}
               aria-label="Import Dataset"
               disabled=${importingDataset}
-              onClick=${() => {
-                if (!importingDataset && folderInputRef.current) {
-                  folderInputRef.current.click();
-                }
-              }}
+              onClick=${() => setShowImportMenu((v) => !v)}
             >
               <span className="sr-only">Import Dataset</span>
               <svg
@@ -762,6 +838,30 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
                 <path d="M5 20h14" />
               </svg>
             </button>
+            ${showImportMenu
+              ? html`<div className="absolute right-0 z-10 mt-2 w-44 rounded-md border border-gray-200 bg-white p-1 text-sm shadow-lg">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-gray-50"
+                    onClick=${() => {
+                      setShowImportMenu(false);
+                      folderInputRef.current?.click();
+                    }}
+                  >
+                    <span>Import Folder…</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-gray-50"
+                    onClick=${() => {
+                      setShowImportMenu(false);
+                      zipInputRef.current?.click();
+                    }}
+                  >
+                    <span>Import ZIP…</span>
+                  </button>
+                </div>`
+              : null}
           </div>
         </div>
         ${importFeedback.error || importFeedback.success

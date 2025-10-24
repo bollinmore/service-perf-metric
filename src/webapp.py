@@ -215,30 +215,28 @@ def _validate_import_candidate(dataset_root: Path) -> None:
     if not dataset_root.exists() or not dataset_root.is_dir():
         raise ValueError("Dataset folder is missing inside the archive.")
 
-    version_dirs: List[Path] = []
-    for child in dataset_root.iterdir():
-        if not child.is_dir():
+    version_dirs: Dict[str, Path] = {}
+    for plog_dir in dataset_root.rglob("*"):
+        if not plog_dir.is_dir():
             continue
-        if child.name.startswith(".") or child.name == "__MACOSX":
+        if plog_dir.name.lower() != "performancelog":
             continue
-        version_dirs.append(child)
+        version_dir = plog_dir.parent
+        try:
+            version_dir.relative_to(dataset_root)
+        except ValueError:
+            continue
+        if version_dir == dataset_root:
+            continue
+        version_dirs[version_dir.as_posix()] = version_dir
 
     if len(version_dirs) < 3:
-        raise ValueError("Dataset must contain at least three version folders.")
-
-    for version_dir in version_dirs:
-        performance_logs = [
-            child
-            for child in version_dir.iterdir()
-            if child.is_dir() and child.name == "PerformanceLog"
-        ]
-        if not performance_logs:
-            raise ValueError(
-                f"Version '{version_dir.name}' is missing a PerformanceLog directory."
-            )
+        raise ValueError(
+            "Dataset must contain at least three version folders each containing a PerformanceLog directory."
+        )
 
 
-def _handle_zip_upload(file_storage, tmp_path: Path) -> Tuple[str, Path]:
+def _handle_zip_upload(file_storage, tmp_path: Path, provided_name: str | None) -> Tuple[str, Path]:
     archive_name = secure_filename(file_storage.filename or "")
     if not archive_name or not archive_name.lower().endswith(".zip"):
         abort(400, "Dataset archive must be a .zip file.")
@@ -246,38 +244,74 @@ def _handle_zip_upload(file_storage, tmp_path: Path) -> Tuple[str, Path]:
     archive_path = tmp_path / archive_name
     file_storage.save(archive_path)
 
-    raw_name: str | None = None
-    dataset_name: str | None = None
     try:
         with zipfile.ZipFile(archive_path) as zf:
-            members = [name for name in zf.namelist() if name and not name.endswith("/")]
-            if not members:
+            # Collect valid members and discover top-level folders, skipping hidden/mac metadata
+            valid_members = []
+            top_levels = set()
+            for zi in zf.infolist():
+                name = zi.filename.replace("\\", "/")
+                if not name or name in {"/", ""}:
+                    continue
+                if name.startswith("__MACOSX/"):
+                    continue
+                parts = [p for p in Path(name).parts if p not in {"", ".", ".."}]
+                if not parts or (parts[0].startswith("__MACOSX") or parts[0].startswith(".")):
+                    continue
+                top_levels.add(parts[0])
+                valid_members.append(zi)
+
+            if not valid_members:
                 abort(400, "Dataset archive is empty.")
-            top_levels = {Path(name).parts[0] for name in members if Path(name).parts}
-            if not top_levels:
-                abort(400, "Dataset archive must contain a dataset folder.")
-            if len(top_levels) > 1:
-                abort(400, "Dataset archive must contain a single dataset folder.")
-            raw_name = next(iter(top_levels))
-            dataset_name = secure_filename(raw_name)
+
+            # Determine dataset name
+            dataset_name: str | None = None
+            if provided_name:
+                dataset_name = secure_filename(provided_name)
+            elif len(top_levels) == 1:
+                dataset_name = secure_filename(next(iter(top_levels)))
+            else:
+                dataset_name = secure_filename(Path(archive_name).stem)
             if not dataset_name:
                 abort(400, "Dataset name is invalid.")
-            zf.extractall(tmp_path)
+
+            dataset_root = tmp_path / dataset_name
+            if dataset_root.exists():
+                shutil.rmtree(dataset_root)
+            dataset_root.mkdir(parents=True, exist_ok=True)
+
+            common_prefix = next(iter(top_levels)) if len(top_levels) == 1 else None
+
+            for zi in valid_members:
+                name = zi.filename.replace("\\", "/")
+                if not name:
+                    continue
+                if name.endswith("/"):
+                    rel = name[:-1]
+                else:
+                    rel = name
+                rel_parts = [p for p in Path(rel).parts if p not in {"", ".", ".."}]
+                if not rel_parts:
+                    continue
+                if rel_parts[0].startswith("__MACOSX") or rel_parts[0].startswith("."):
+                    continue
+                if common_prefix and rel_parts[0] == common_prefix:
+                    rel_parts = rel_parts[1:]
+                if rel_parts and rel_parts[0] == dataset_name:
+                    rel_parts = rel_parts[1:]
+                if not rel_parts:
+                    continue
+                dest_path = dataset_root.joinpath(*rel_parts)
+                if zi.is_dir() or name.endswith("/"):
+                    dest_path.mkdir(parents=True, exist_ok=True)
+                    continue
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(zi) as src, open(dest_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+            return dataset_name, dataset_root
     except zipfile.BadZipFile:
         abort(400, "Invalid ZIP archive.")
-
-    if raw_name is None or dataset_name is None:
-        abort(400, "Dataset archive is malformed.")
-
-    extracted_root = tmp_path / raw_name
-    if dataset_name != raw_name:
-        sanitized_root = tmp_path / dataset_name
-        if sanitized_root.exists():
-            shutil.rmtree(sanitized_root)
-        extracted_root.rename(sanitized_root)
-        extracted_root = sanitized_root
-
-    return dataset_name, extracted_root
 
 
 def _handle_folder_upload(files: List, tmp_path: Path, provided_name: str | None) -> Tuple[str, Path]:
@@ -349,7 +383,7 @@ def import_dataset() -> Tuple[Response, int]:
         tmp_path = Path(tmpdir)
 
         if file_storage and file_storage.filename:
-            dataset_name, extracted_root = _handle_zip_upload(file_storage, tmp_path)
+            dataset_name, extracted_root = _handle_zip_upload(file_storage, tmp_path, provided_name)
         elif folder_files:
             try:
                 dataset_name, extracted_root = _handle_folder_upload(
