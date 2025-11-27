@@ -2,3 +2,12 @@ data*/
 result/
 .codex/
 *.pyc
+__pycache__/
+.venv/
+venv/
+.env
+.env.*
+dist/
+build/
+*.egg-info/
+.DS_Store

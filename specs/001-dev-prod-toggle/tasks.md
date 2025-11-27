@@ -17,8 +17,8 @@
 
 **Purpose**: Ensure environment configuration and dependencies support mode toggling.
 
-- [ ] T001 Add `python-dotenv` (or confirm existing) to `requirements.txt` for `.env` loading.
-- [ ] T002 Create/update `.env.example` with `SPM_MODE=development` and note allowed values.
+- [X] T001 Add `python-dotenv` (or confirm existing) to `requirements.txt` for `.env` loading.
+- [X] T002 Create/update `.env.example` with `SPM_MODE=development` and note allowed values.
 
 ---
 
@@ -26,9 +26,9 @@
 
 **Purpose**: Core configuration and service scaffolding required before user stories.
 
-- [ ] T003 Implement environment loader for `SPM_MODE` with default `development` and invalid-value warning in `src/config.py`.
-- [ ] T004 Wire `spm.py` serve bootstrap to use the env loader and expose active mode metadata to downstream services.
-- [ ] T005 Create mode/readiness service scaffold (snapshot storage, readiness data structure, logging hooks) in `src/services/mode_service.py`.
+- [X] T003 Implement environment loader for `SPM_MODE` with default `development` and invalid-value warning in `src/config.py`.
+- [X] T004 Wire `spm.py` serve bootstrap to use the env loader and expose active mode metadata to downstream services.
+- [X] T005 Create mode/readiness service scaffold (snapshot storage, readiness data structure, logging hooks) in `src/services/mode_service.py`.
 
 **Checkpoint**: Foundation ready - user story implementation can now begin.
 
@@ -42,11 +42,11 @@
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] Implement mode status model (mode, source, validated, snapshot) with persistence hooks in `src/services/mode_service.py`.
-- [ ] T007 [US1] Add dev version snapshot capture before Production switch in `src/services/mode_service.py`.
-- [ ] T008 [US1] Expose `/mode` GET/POST per contract in `spm.py` (or Flask blueprint) applying local-only toggle logic and snapshot preservation.
-- [ ] T009 [P] [US1] Add mode-switch logging (user/time/result/notes) in `src/services/mode_service.py` and ensure log output during `python spm.py serve`.
-- [ ] T010 [US1] Display active mode and preserved dev version in serve startup output or status UI in `spm.py` and related `templates/` assets.
+- [X] T006 [US1] Implement mode status model (mode, source, validated, snapshot) with persistence hooks in `src/services/mode_service.py`.
+- [X] T007 [US1] Add dev version snapshot capture before Production switch in `src/services/mode_service.py`.
+- [X] T008 [US1] Expose `/mode` GET/POST per contract in `spm.py` (or Flask blueprint) applying local-only toggle logic and snapshot preservation.
+- [X] T009 [P] [US1] Add mode-switch logging (user/time/result/notes) in `src/services/mode_service.py` and ensure log output during `python spm.py serve`.
+- [X] T010 [US1] Display active mode and preserved dev version in serve startup output or status UI in `spm.py` and related `templates/` assets.
 
 **Checkpoint**: User Story 1 functional and testable independently.
 
@@ -60,10 +60,10 @@
 
 ### Implementation for User Story 2
 
-- [ ] T011 [US2] Implement readiness checklist evaluation (required items, statuses, messages) in `src/services/readiness.py` (or within `mode_service.py`).
-- [ ] T012 [US2] Integrate readiness validation into Production switch handler in `spm.py`, returning failure details when incomplete.
-- [ ] T013 [P] [US2] Expose `/mode/readiness` GET endpoint per contract in `spm.py` returning checklist status.
-- [ ] T014 [US2] Document readiness requirements and expected switch behavior in `README.md` under deployment instructions.
+- [X] T011 [US2] Implement readiness checklist evaluation (required items, statuses, messages) in `src/services/readiness.py` (or within `mode_service.py`).
+- [X] T012 [US2] Integrate readiness validation into Production switch handler in `spm.py`, returning failure details when incomplete.
+- [X] T013 [P] [US2] Expose `/mode/readiness` GET endpoint per contract in `spm.py` returning checklist status.
+- [X] T014 [US2] Document readiness requirements and expected switch behavior in `README.md` under deployment instructions.
 
 **Checkpoint**: User Story 2 functional and testable independently.
 
@@ -77,9 +77,9 @@
 
 ### Implementation for User Story 3
 
-- [ ] T015 [US3] Implement revert-to-development flow using preserved snapshot in `src/services/mode_service.py` (restore config/state).
-- [ ] T016 [US3] Add API/serve action to revert (extend `/mode` POST or separate route) in `spm.py` with confirmations.
-- [ ] T017 [P] [US3] Ensure invalid/absent `SPM_MODE` falls back to Development with warning in `src/config.py` and reflected in status outputs.
+- [X] T015 [US3] Implement revert-to-development flow using preserved snapshot in `src/services/mode_service.py` (restore config/state).
+- [X] T016 [US3] Add API/serve action to revert (extend `/mode` POST or separate route) in `spm.py` with confirmations.
+- [X] T017 [P] [US3] Ensure invalid/absent `SPM_MODE` falls back to Development with warning in `src/config.py` and reflected in status outputs.
 
 **Checkpoint**: User Story 3 functional and testable independently.
 
@@ -89,8 +89,8 @@
 
 **Purpose**: Documentation and consistency across deployment modes.
 
-- [ ] T018 [P] Update `quickstart.md` and `docs/` (if referenced) to align with `.env` toggle and Docker forced-Production behavior.
-- [ ] T019 Verify Docker defaults enforce `SPM_MODE=production` in `Dockerfile` and `docker-compose.yml` without reading repo `.env`.
+- [X] T018 [P] Update `quickstart.md` and `docs/` (if referenced) to align with `.env` toggle and Docker forced-Production behavior.
+- [X] T019 Verify Docker defaults enforce `SPM_MODE=production` in `Dockerfile` and `docker-compose.yml` without reading repo `.env`.
 - [ ] T020 Run end-to-end manual check following README/quickstart for local serve and Docker to confirm parity.
 
 ---

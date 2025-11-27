@@ -6,6 +6,8 @@ services:
     ports:
       - "6231:6231"
     environment:
+      - SPM_MODE=production
+      - SPM_FORCE_PRODUCTION=1
       - SPM_DEFAULT_DATASET=data
       - SPM_RESULT_BASE=/app/result
       - SPM_RESULT_ROOT=/app/result/data
@@ -14,4 +16,3 @@ services:
       - ./result:/app/result
       - ./recycle:/app/recycle
     restart: unless-stopped
-

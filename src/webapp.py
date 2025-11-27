@@ -30,6 +30,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from spm import DEFAULT_DATA_DIR, generate_reports
+from src.services.mode_service import get_mode_service
 
 
 # Cached HTML for backend API docs
@@ -56,6 +57,10 @@ EXCLUDED_SERVICES = {
     "OUTLOOK",
     "Outlook",
 }
+
+
+def _mode_service():
+    return get_mode_service(PROJECT_ROOT)
 
 
 def _resolve_result_dir() -> Path:
@@ -276,6 +281,58 @@ def _load_backend_api_html() -> str:
     _BACKEND_API_CACHE["mtime"] = mtime
     _BACKEND_API_CACHE["html"] = html
     return html
+
+
+@app.get("/mode")
+def get_mode_status():
+    service = _mode_service()
+    readiness = service.readiness_status()
+    status = service.current_status().to_dict()
+    status["readiness"] = readiness.to_dict()
+    return jsonify(status)
+
+
+@app.post("/mode")
+def set_mode_status():
+    service = _mode_service()
+    payload = request.get_json(silent=True) or {}
+    target_mode = (payload.get("mode") or "").strip().lower()
+    notes = payload.get("notes")
+
+    if service.docker_forced:
+        status = service.current_status().to_dict()
+        readiness = service.readiness_status().to_dict()
+        status["readiness"] = readiness
+        status["warnings"] = status.get("warnings", []) + [
+            "Mode changes are locked to production in Docker environments."
+        ]
+        return jsonify(status), 200
+
+    invalid_request = target_mode and target_mode not in {"development", "production", "revert"}
+    if target_mode == "revert" or target_mode == "development":
+        updated = service.revert_to_development()
+    else:
+        updated = service.set_mode(target_mode or "development", notes=notes)
+
+    readiness = service.readiness_status()
+    response_body = updated.to_dict()
+    response_body["readiness"] = readiness.to_dict()
+    if invalid_request:
+        response_body.setdefault("warnings", []).append("Invalid mode requested; defaulted to development.")
+        return jsonify(response_body), 400
+    if updated.mode == "production" and not readiness.all_complete:
+        response_body.setdefault("warnings", []).append(
+            "Production readiness incomplete; resolve checklist items before deploying."
+        )
+        return jsonify(response_body), 400
+    return jsonify(response_body), 200
+
+
+@app.get("/mode/readiness")
+def get_readiness():
+    service = _mode_service()
+    readiness = service.readiness_status()
+    return jsonify(readiness.to_dict())
 
 
 def _unique_recycle_path(base: Path, name: str) -> Path:
@@ -589,8 +646,14 @@ def index() -> str:
             "analyticsBar": url_for("analytics_bardata"),
             "importDataset": url_for("import_dataset"),
             "deleteDataset": url_for("delete_dataset"),
+            "modeStatus": url_for("get_mode_status"),
+            "modeReadiness": url_for("get_readiness"),
         },
     }
+    mode_service = _mode_service()
+    readiness = mode_service.readiness_status()
+    minimal_state["mode"] = mode_service.current_status().to_dict()
+    minimal_state["mode"]["readiness"] = readiness.to_dict()
 
     return render_template("index.html", initial_state=minimal_state)
 
