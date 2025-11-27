@@ -313,7 +313,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--host", default="0.0.0.0", help="Host interface for the web server"
     )
     serve_parser.add_argument(
-        "--port", default=8000, type=int, help="Port for the web server (default: 8000)"
+        "--port", default=6231, type=int, help="Port for the web server (default: 6231)"
     )
     serve_parser.add_argument(
         "--debug", action="store_true", help="Run the Flask app in debug mode"

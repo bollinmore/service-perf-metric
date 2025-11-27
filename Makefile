@@ -1,5 +1,5 @@
 IMAGE ?= spm-app:latest
-PORT ?= 8000
+PORT ?= 6231
 NAME ?= spm
 
 .PHONY: help build run stop logs compose-up compose-down shell
@@ -12,7 +12,7 @@ build:
 
 run:
 	docker run --rm -it \
-	  -p $(PORT):8000 \
+	  -p $(PORT):6231 \
 	  -v "$$PWD/data:/app/data" \
 	  -v "$$PWD/result:/app/result" \
 	  -v "$$PWD/recycle:/app/recycle" \
@@ -32,7 +32,7 @@ compose-down:
 
 shell:
 	docker run --rm -it \
-	  -p $(PORT):8000 \
+	  -p $(PORT):6231 \
 	  -v "$$PWD/data:/app/data" \
 	  -v "$$PWD/result:/app/result" \
 	  -v "$$PWD/recycle:/app/recycle" \

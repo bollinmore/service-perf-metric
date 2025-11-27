@@ -63,7 +63,7 @@ python spm.py generate --data data2
 4) Serve the web UI (builds unless `--no-build`)
 
 ```
-python spm.py serve               # http://localhost:8000/
+python spm.py serve               # http://localhost:6231/
 python spm.py serve --data data2  # or positional: python spm.py serve data2
 python spm.py serve --no-build    # skip rebuild when result exists
 ```
@@ -169,7 +169,7 @@ python spm.py generate [--data <path>]  # default: data/
 ### 7.3 `serve`
 
 ```
-python spm.py serve [--data <path>] [--host 0.0.0.0] [--port 8000] [--debug] [--no-build]
+python spm.py serve [--data <path>] [--host 0.0.0.0] [--port 6231] [--debug] [--no-build]
 ```
 
 - Builds reports unless `--no-build`.
@@ -298,7 +298,7 @@ If data is insufficient, returns `warnings`/`error` and an empty figure.
 Example (ZIP):
 
 ```
-curl -F "file=@/path/to/myData.zip" -F "datasetName=myData" http://localhost:8000/api/datasets/import
+curl -F "file=@/path/to/myData.zip" -F "datasetName=myData" http://localhost:6231/api/datasets/import
 ```
 
 ## 9. Data Quality Rules
@@ -409,18 +409,18 @@ docker build -t spm-app:latest .
 
 ### 16.2 Run Container (simple)
 
-- Start the app on port 8000 (maps host ./data, ./result, and ./recycle into the container):
+- Start the app on port 6231 (maps host ./data, ./result, and ./recycle into the container):
 
 ```
 docker run --rm -it \
-  -p 8000:8000 \
+  -p 6231:6231 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/result:/app/result" \
   -v "$PWD/recycle:/app/recycle" \
   --name spm spm-app:latest
 ```
 
-- Access UI at `http://localhost:8000/`.
+- Access UI at `http://localhost:6231/`.
 
 ### 16.3 docker-compose
 
@@ -430,7 +430,7 @@ docker run --rm -it \
 docker compose up --build
 ```
 
-- Default ports: `8000:8000`. Data and results are persisted via bind mounts.
+- Default ports: `6231:6231`. Data and results are persisted via bind mounts.
 
 ### 16.4 Environment Variables
 
@@ -444,7 +444,7 @@ docker compose up --build
 - Alternatively, upload datasets at runtime via the UI “Import Dataset” button or the API:
 
 ```
-curl -F "file=@/path/to/myData.zip" -F "datasetName=myData" http://localhost:8000/api/datasets/import
+curl -F "file=@/path/to/myData.zip" -F "datasetName=myData" http://localhost:6231/api/datasets/import
 ```
 
 - Generated artifacts are written to `./result/<dataset>/`. Deleting a dataset via the UI moves its data and results under `./recycle/`.

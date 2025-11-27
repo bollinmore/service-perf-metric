@@ -14,8 +14,8 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - Start the browser UI (builds reports unless `--no-build` is supplied):
   - `python spm.py serve`
   - `python spm.py serve --data data2` (shorthand: `python spm.py serve data2`)
-  - Open tables at `http://localhost:8000/`
-  - Analytics dashboard at `http://localhost:8000/analytics`
+  - Open tables at `http://localhost:6231/`
+  - Analytics dashboard at `http://localhost:6231/analytics`
   - Switch datasets through the Average Loading Time card dropdown to compare different `result/<data-folder>` outputs
   - Use the left sidebar to flip between analytics, Compare, and in-page CSV previews
 - Run the Flask app directly (custom host/port as needed):

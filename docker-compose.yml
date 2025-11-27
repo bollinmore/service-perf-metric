@@ -4,13 +4,11 @@ services:
     build: .
     image: spm-app:latest
     ports:
-      - "8000:8000"
+      - "6231:6231"
     environment:
-      # Optional: set a default dataset name in the UI
-      # - SPM_DEFAULT_DATASET=data
-      # Optional overrides for where results are stored
-      # - SPM_RESULT_BASE=/app/result
-      # - SPM_RESULT_ROOT=/app/result/data
+      - SPM_DEFAULT_DATASET=data
+      - SPM_RESULT_BASE=/app/result
+      - SPM_RESULT_ROOT=/app/result/data
     volumes:
       - ./data:/app/data
       - ./result:/app/result
