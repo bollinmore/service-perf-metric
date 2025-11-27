@@ -1,22 +1,44 @@
 # syntax=docker/dockerfile:1
-FROM python:3.11-slim
+
+FROM python:3.11-alpine AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Build wheels once (kept out of final image)
+RUN apk add --no-cache build-base openblas-dev
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --no-deps --wheel-dir /wheels -r requirements.txt
+
+# Stage app sources (no data)
+COPY spm.py ./spm.py
+COPY src ./src
+COPY static ./static
+COPY templates ./templates
+
+
+FROM python:3.11-alpine
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# System deps (optional, keep slim)
-RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+# Runtime libs only (pandas needs openblas, libstdc++)
+RUN apk add --no-cache libstdc++ openblas
 
-# Install Python deps first for better caching
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Install from prebuilt wheels to avoid build deps
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir --no-compile /wheels/*
 
-# Copy application
-COPY . .
+# Copy application code
+COPY --from=builder /app/spm.py ./spm.py
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/static ./static
+COPY --from=builder /app/templates ./templates
 
 # Expose Flask/Gunicorn port
 EXPOSE 6231

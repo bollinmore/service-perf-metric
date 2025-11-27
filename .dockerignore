@@ -8,6 +8,10 @@ __pycache__
 *.log
 result/
 recycle/
+data/
+data*/
+__head.js
+__temp.txt
 node_modules/
 dist/
 build/
