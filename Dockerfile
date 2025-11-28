@@ -23,7 +23,9 @@ COPY templates ./templates
 FROM python:3.11-alpine
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    SPM_MODE=production \
+    SPM_FORCE_PRODUCTION=1
 
 WORKDIR /app
 
@@ -45,4 +47,3 @@ EXPOSE 6231
 
 # Default: generate reports (if needed) and start web UI
 CMD ["python", "spm.py", "serve", "--host", "0.0.0.0", "--port", "6231"]
-

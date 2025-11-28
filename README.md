@@ -18,6 +18,10 @@ Browse performance CSV outputs in a browser and generate summary reports.
   - Analytics dashboard at `http://localhost:6231/analytics`
   - Switch datasets through the Average Loading Time card dropdown to compare different `result/<data-folder>` outputs
   - Use the left sidebar to flip between analytics, Compare, and in-page CSV previews
+- Mode toggle (local only):
+  - Add `SPM_MODE=development` or `SPM_MODE=production` to `.env` (invalid/missing values default to development with a warning).
+  - Start with `python spm.py serve`; startup logs display the active mode and any preserved development snapshot.
+  - Check status via `GET /mode` and readiness via `GET /mode/readiness`; toggle with `POST /mode` (production toggle blocks if readiness is incomplete).
 - Run the Flask app directly (custom host/port as needed):
   - `python src/webapp.py --host 127.0.0.1 --port 5001`
 - Clean out generated artifacts anytime:
@@ -35,6 +39,7 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - `src/report.py` stats generator
 - `src/webapp.py` Flask CSV browser
 - `spm.py` entry-point CLI (`clean`, `generate`, `serve`, `merge`)
+- Docker deployments: forced Production mode by default (`SPM_MODE=production`, `SPM_FORCE_PRODUCTION=1` in Dockerfile/docker-compose) regardless of local `.env`.
 
 ## CI
 

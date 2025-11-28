@@ -24,9 +24,14 @@ def result_root_for_data(data_root: Path) -> Path:
 sys.path.insert(0, str(BASE_DIR))
 
 try:
+    from src import config
     from src import extract
+    from src.services.mode_service import get_mode_service
 except ModuleNotFoundError as exc:  # pragma: no cover - import guard
     raise SystemExit(f"Failed to import project modules: {exc}") from exc
+
+ENV_PATH = config.load_env(BASE_DIR / ".env")
+MODE_SERVICE = get_mode_service(BASE_DIR)
 
 
 def _resolve_path(path_str: str, default: Path) -> Path:
@@ -250,6 +255,19 @@ def merge_data_folders(
 
 def serve_webapp(host: str, port: int, debug: bool, result_root: Path, base_result_dir: Path) -> None:
     """Start the Flask web application."""
+    mode_status = MODE_SERVICE.current_status()
+    os.environ["SPM_MODE"] = mode_status.mode
+    os.environ["SPM_MODE_SOURCE"] = mode_status.source
+    if mode_status.warnings:
+        for note in mode_status.warnings:
+            print(f"[mode] Warning: {note}")
+    print(f"[mode] Active mode: {mode_status.mode} (source={mode_status.source})")
+    if mode_status.snapshot:
+        print(
+            "[mode] Preserved development version: "
+            f"{mode_status.snapshot.id} @ {mode_status.snapshot.timestamp.isoformat()}"
+        )
+
     os.environ["SPM_RESULT_ROOT"] = str(result_root)
     os.environ["SPM_RESULT_BASE"] = str(base_result_dir)
     dataset_name = result_root.name if result_root.parent == base_result_dir else ""
@@ -267,6 +285,22 @@ def serve_webapp(host: str, port: int, debug: bool, result_root: Path, base_resu
         webapp.SUMMARY_FILE = result_root / "summary.csv"
 
     try:
+        production_requested = (
+            os.environ.get("SPM_FORCE_PRODUCTION") == "1" or not debug
+        )
+        if production_requested:
+            try:
+                from waitress import serve as waitress_serve
+            except ImportError:
+                print(
+                    "[serve] Production server requested but 'waitress' is not installed; "
+                    "falling back to Flask development server"
+                )
+            else:
+                print("[serve] Starting production WSGI server via waitress")
+                waitress_serve(webapp.app, host=host, port=port)
+                return
+
         webapp.app.run(host=host, port=port, debug=debug)
     except KeyboardInterrupt:
         print("\n[serve] Shutting down")

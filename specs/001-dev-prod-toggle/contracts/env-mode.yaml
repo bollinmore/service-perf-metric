@@ -1,0 +1,114 @@
+openapi: 3.0.3
+info:
+  title: Deployment Mode API
+  version: 1.0.0
+  description: Manage and inspect deployment mode for local serve vs production deployments.
+servers:
+  - url: http://localhost:5000
+paths:
+  /mode:
+    get:
+      summary: Get current deployment mode
+      responses:
+        '200':
+          description: Current mode status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModeStatus'
+    post:
+      summary: Set deployment mode (local only)
+      description: Applies to local serve; Docker deployments force production regardless of payload.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetModeRequest'
+      responses:
+        '200':
+          description: Mode updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModeStatus'
+        '400':
+          description: Invalid mode supplied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /mode/readiness:
+    get:
+      summary: Get production readiness checklist status
+      responses:
+        '200':
+          description: Readiness items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+components:
+  schemas:
+    ModeStatus:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [development, production]
+        source:
+          type: string
+          enum: [env, docker-forced]
+        validated:
+          type: boolean
+        snapshot:
+          $ref: '#/components/schemas/VersionSnapshot'
+      required: [mode, source, validated]
+    SetModeRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [development, production]
+      required: [mode]
+    VersionSnapshot:
+      type: object
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        notes:
+          type: string
+    ReadinessStatus:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReadinessItem'
+        allComplete:
+          type: boolean
+      required: [items, allComplete]
+    ReadinessItem:
+      type: object
+      properties:
+        name:
+          type: string
+        required:
+          type: boolean
+        status:
+          type: string
+          enum: [pending, complete]
+        message:
+          type: string
+      required: [name, required, status]
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+      required: [error]
