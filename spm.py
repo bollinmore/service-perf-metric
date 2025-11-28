@@ -26,12 +26,19 @@ sys.path.insert(0, str(BASE_DIR))
 try:
     from src import config
     from src import extract
+    from src.lib.path_utils import ValidationError, parse_versions_arg, validate_base_path
+    from src.lib.logging import get_logger, log_selection, log_upload_rejection
+    from src.services.comparison_service import plan_comparison, refresh_results
     from src.services.mode_service import get_mode_service
+    from src.services.selection_service import validate_selection
+    from src.services.version_discovery import discover_versions
+    from src.services.upload_validator import validate_upload
 except ModuleNotFoundError as exc:  # pragma: no cover - import guard
     raise SystemExit(f"Failed to import project modules: {exc}") from exc
 
 ENV_PATH = config.load_env(BASE_DIR / ".env")
 MODE_SERVICE = get_mode_service(BASE_DIR)
+LOGGER = config.configure_logging()
 
 
 def _resolve_path(path_str: str, default: Path) -> Path:
@@ -49,32 +56,37 @@ def clean_results(result_dir: Path) -> None:
     print(f"[clean] Removed {result_dir}")
 
 
-def _collect_log_dirs(data_root: Path) -> List[Tuple[str, Path]]:
+def _collect_log_dirs(data_root: Path, allowed_versions: List[str] | None = None) -> List[Tuple[str, Path]]:
     """Return list of (dataset_name, log_dir) pairs under the data root."""
     datasets: List[Tuple[str, Path]] = []
     if not data_root.exists():
         print(f"[generate] Data folder not found: {data_root}")
         return []
 
+    allowed_set = set(allowed_versions) if allowed_versions else None
+
     for candidate in sorted(data_root.iterdir()):
         if not candidate.is_dir():
             continue
+        if allowed_set and candidate.name not in allowed_set:
+            continue
         # Prefer a direct PerformanceLog folder, but fall back to any child match
         log_dir = candidate / "PerformanceLog"
-        if log_dir.is_dir():
+        if log_dir.is_dir() and any(log_dir.glob("*.log")):
             datasets.append((candidate.name, log_dir))
             continue
-        matching = list(candidate.rglob("PerformanceLog"))
-        if matching:
+        matching = [path for path in candidate.glob("PerformanceLog") if path.is_dir()]
+        if matching and any(matching[0].glob("*.log")):
             datasets.append((candidate.name, matching[0]))
     return datasets
 
 
 def _determine_pattern(log_dir: Path) -> str:
-    """Pick a glob pattern for log files, skipping login logs when possible."""
-    loading_logs = list(log_dir.glob("*loading.log"))
-    if loading_logs:
+    """Pick a glob pattern for log files, preferring loading/inquire2 primary logs."""
+    if list(log_dir.glob("*loading.log")):
         return "*loading.log"
+    if list(log_dir.glob("*inquire2.log")):
+        return "*inquire2.log"
     return "*.log"
 
 
@@ -141,7 +153,7 @@ def _combine_summaries(summary_map: Dict[str, Path], output_path: Path) -> None:
     print(f"[generate] Wrote combined summary to {output_path}")
 
 
-def generate_reports(data_root: Path, result_root: Path) -> None:
+def generate_reports(data_root: Path, result_root: Path, allowed_versions: List[str] | None = None) -> None:
     """Parse logs under data_root and produce CSV summaries in result_root."""
     result_root.mkdir(parents=True, exist_ok=True)
 
@@ -153,7 +165,7 @@ def generate_reports(data_root: Path, result_root: Path) -> None:
         )
         return
 
-    datasets = _collect_log_dirs(data_root)
+    datasets = _collect_log_dirs(data_root, allowed_versions=allowed_versions)
     if not datasets:
         print(f"[generate] No PerformanceLog folders found under {data_root}")
         return
@@ -321,27 +333,40 @@ def _build_parser() -> argparse.ArgumentParser:
     clean_parser.set_defaults(func=cmd_clean)
 
     generate_parser = subparsers.add_parser(
-        "generate", help="Parse logs and build reports"
+        "generate", help="Parse logs and build reports (requires --data-folder)"
     )
     generate_parser.add_argument(
-        "--data",
-        default=str(DEFAULT_DATA_DIR),
-        help="Data folder containing version folders (default: data)",
+        "--data-folder",
+        required=True,
+        help="Data folder containing version folders (required)",
+    )
+    generate_parser.add_argument(
+        "--versions",
+        help="Optional comma-separated list of versions to include (e.g., 2.0.1.0,2.0.1.2)",
+    )
+    generate_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Force refresh by clearing previous results before generation",
+    )
+    generate_parser.add_argument(
+        "--allow-conflicts",
+        action="store_true",
+        help="Proceed even if log filename conflicts detected across versions",
     )
     generate_parser.set_defaults(func=cmd_generate)
 
     serve_parser = subparsers.add_parser(
-        "serve", help="Build reports (optional) and start the web app"
+        "serve", help="Build reports (optional) and start the web app (requires --data-folder)"
     )
     serve_parser.add_argument(
-        "--data",
-        default=str(DEFAULT_DATA_DIR),
-        help="Data folder containing version folders (default: data)",
+        "--data-folder",
+        required=True,
+        help="Data folder containing version folders (required)",
     )
     serve_parser.add_argument(
-        "data_dir",
-        nargs="?",
-        help="Optional positional data folder (equivalent to --data)",
+        "--versions",
+        help="Optional comma-separated list of versions to include (e.g., 2.0.1.0,2.0.1.2)",
     )
     serve_parser.add_argument(
         "--host", default="0.0.0.0", help="Host interface for the web server"
@@ -356,6 +381,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-build",
         action="store_true",
         help="Skip report generation before launching the web app",
+    )
+    serve_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Force refresh by clearing previous results before serve",
+    )
+    serve_parser.add_argument(
+        "--allow-conflicts",
+        action="store_true",
+        help="Proceed even if log filename conflicts detected across versions",
     )
     serve_parser.set_defaults(func=cmd_serve)
 
@@ -379,6 +414,56 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     merge_parser.set_defaults(func=cmd_merge)
 
+    versions_parser = subparsers.add_parser(
+        "versions", help="List available versions under a data folder"
+    )
+    versions_parser.add_argument(
+        "--data-folder",
+        required=True,
+        help="Data folder containing version folders (required)",
+    )
+    versions_parser.set_defaults(func=cmd_versions)
+
+    compare_parser = subparsers.add_parser(
+        "compare", help="Validate selected versions and generate reports"
+    )
+    compare_parser.add_argument(
+        "--data-folder",
+        required=True,
+        help="Data folder containing version folders (required)",
+    )
+    compare_parser.add_argument(
+        "--versions",
+        required=True,
+        help="Comma-separated list of versions to compare (2-4 required)",
+    )
+    compare_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Force refresh by clearing previous results before comparison",
+    )
+    compare_parser.add_argument(
+        "--allow-conflicts",
+        action="store_true",
+        help="Proceed even if log filename conflicts detected across versions",
+    )
+    compare_parser.set_defaults(func=cmd_compare)
+
+    upload_parser = subparsers.add_parser(
+        "upload", help="Validate and extract a single zip containing <tool-version>/PerformanceLog/*.log"
+    )
+    upload_parser.add_argument(
+        "--data-folder",
+        required=True,
+        help="Base data folder where the version folder will be created",
+    )
+    upload_parser.add_argument(
+        "--zip",
+        required=True,
+        help="Path to the zip file to upload",
+    )
+    upload_parser.set_defaults(func=cmd_upload)
+
     return parser
 
 
@@ -388,18 +473,33 @@ def cmd_clean(args: argparse.Namespace) -> None:
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
-    data_root = _resolve_path(args.data, DEFAULT_DATA_DIR)
-    result_root = result_root_for_data(data_root)
-    generate_reports(data_root, result_root)
+    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    versions = parse_versions_arg(args.versions)
+    plan = plan_comparison(data_root, versions or None, result_root_for_data(data_root))
+    if plan.conflicts and not getattr(args, "allow_conflicts", False):
+        raise ValidationError("; ".join(plan.conflicts))
+    log_selection(LOGGER, str(data_root), plan.selected_versions)
+    if getattr(args, "refresh", False):
+        refresh_results(plan, force_refresh=True)
+    generate_reports(plan.base_path, plan.result_root, allowed_versions=plan.selected_versions)
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    data_arg = args.data_dir or args.data
-    data_root = _resolve_path(data_arg, DEFAULT_DATA_DIR)
-    result_root = result_root_for_data(data_root)
+    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    versions = parse_versions_arg(args.versions)
+    if not versions:
+        discovered = discover_versions(data_root)
+        all_names = [v.name for v in discovered]
+        versions = all_names[-3:] if len(all_names) > 3 else all_names
+    plan = plan_comparison(data_root, versions or None, result_root_for_data(data_root))
+    if plan.conflicts and not getattr(args, "allow_conflicts", False):
+        raise ValidationError("; ".join(plan.conflicts))
+    log_selection(LOGGER, str(data_root), plan.selected_versions)
     if not args.no_build:
-        generate_reports(data_root, result_root)
-    serve_webapp(args.host, args.port, args.debug, result_root, DEFAULT_RESULT_DIR)
+        if getattr(args, "refresh", False):
+            refresh_results(plan, force_refresh=True)
+        generate_reports(plan.base_path, plan.result_root, allowed_versions=plan.selected_versions)
+    serve_webapp(args.host, args.port, args.debug, plan.result_root, DEFAULT_RESULT_DIR)
 
 
 def cmd_merge(args: argparse.Namespace) -> None:
@@ -408,10 +508,72 @@ def cmd_merge(args: argparse.Namespace) -> None:
     merge_data_folders(sources, dest, overwrite=args.overwrite)
 
 
+def cmd_versions(args: argparse.Namespace) -> None:
+    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    versions = discover_versions(data_root)
+    if not versions:
+        print(f"[versions] No versions found under {data_root}")
+        return
+    print("[versions] Available:")
+    for v in versions:
+        print(f" - {v.name} ({v.log_dir})")
+
+
+def cmd_compare(args: argparse.Namespace) -> None:
+    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    versions = parse_versions_arg(args.versions)
+    plan = plan_comparison(data_root, versions or None, result_root_for_data(data_root))
+    if plan.conflicts and not getattr(args, "allow_conflicts", False):
+        raise ValidationError("; ".join(plan.conflicts))
+    log_selection(LOGGER, str(data_root), plan.selected_versions)
+    if getattr(args, "refresh", False):
+        refresh_results(plan, force_refresh=True)
+    generate_reports(plan.base_path, plan.result_root, allowed_versions=plan.selected_versions)
+
+
+def cmd_upload(args: argparse.Namespace) -> None:
+    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    zip_path = _resolve_path(args.zip, BASE_DIR)
+    try:
+        version_name = validate_upload(zip_path)
+    except ValidationError as exc:
+        log_upload_rejection(LOGGER, str(exc))
+        raise
+
+    target_dir = data_root / version_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    import zipfile
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        top_level = version_name
+        for member in zf.infolist():
+            parts = Path(member.filename).parts
+            if not parts:
+                continue
+            if parts[0] != top_level:
+                raise ValidationError("Upload contains mismatched top-level folder.")
+            member_rel = Path(*parts[1:])
+            if ".." in member_rel.parts:
+                raise ValidationError("Upload contains unsafe paths.")
+            if member.is_dir():
+                (target_dir / member_rel).mkdir(parents=True, exist_ok=True)
+                continue
+            dest_file = target_dir / member_rel
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member, "r") as src, dest_file.open("wb") as dst:
+                dst.write(src.read())
+    print(f"[upload] Uploaded and extracted version '{version_name}' into {target_dir}")
+
+
 def main(argv: List[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except ValidationError as exc:
+        print(f"[error] {exc}")
+        return 2
     return 0
 
 

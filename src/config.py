@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ALLOWED_MODES = {"development", "production"}
+DEFAULT_DATA_FOLDER = PROJECT_ROOT / "data"
+DEFAULT_LOG_LEVEL = "INFO"
 
 
 @dataclass
@@ -62,3 +65,22 @@ def apply_mode_env(resolution: ModeResolution) -> None:
         os.environ["SPM_MODE_FORCED"] = "1"
     else:
         os.environ.pop("SPM_MODE_FORCED", None)
+
+
+def resolve_data_folder(explicit: Path | None) -> Path:
+    """Resolve the data folder from explicit CLI input or environment, with a safe default."""
+    if explicit:
+        return explicit
+    env_path = os.environ.get("SPM_DATA_FOLDER")
+    if env_path:
+        return Path(env_path)
+    return DEFAULT_DATA_FOLDER
+
+
+def configure_logging(name: str = "spm", level: Optional[str] = None) -> logging.Logger:
+    """Configure a root logger with sane defaults for CLI and services."""
+    logging.basicConfig(
+        level=getattr(logging, (level or os.environ.get("SPM_LOG_LEVEL", DEFAULT_LOG_LEVEL)).upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    )
+    return logging.getLogger(name)

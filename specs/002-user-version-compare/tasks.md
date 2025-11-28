@@ -17,8 +17,8 @@
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create base data-folder and logging config entries (or module) in `src/config.py` to be consumed by CLI and services.
-- [ ] T002 Wire `spm.py` startup to load config and fail fast with a clear message when `--data-folder` is missing.
+- [X] T001 Create base data-folder and logging config entries (or module) in `src/config.py` to be consumed by CLI and services.
+- [X] T002 Wire `spm.py` startup to load config and fail fast with a clear message when `--data-folder` is missing.
 
 ---
 
@@ -26,11 +26,11 @@
 
 **Purpose**: Core infrastructure that MUST be complete before ANY user story can be implemented
 
-- [ ] T003 Implement CLI arg parsing for `--data-folder` (required) and optional `--versions` (comma-separated) in `spm.py`.
-- [ ] T004 [P] Add base-path validation and version-list parsing utilities in `src/lib/path_utils.py`.
-- [ ] T005 [P] Implement version discovery that scans immediate subfolders for `<tool-version>/PerformanceLog/*.log` in `src/services/version_discovery.py`.
-- [ ] T006 Add single-zip upload structure validator enforcing `<tool-version>/PerformanceLog/*.log` in `src/services/upload_validator.py`.
-- [ ] T007 [P] Add logging/tracing helper to record selections, uploads, and errors with timestamps in `src/lib/logging.py`.
+- [X] T003 Implement CLI arg parsing for `--data-folder` (required) and optional `--versions` (comma-separated) in `spm.py`.
+- [X] T004 [P] Add base-path validation and version-list parsing utilities in `src/lib/path_utils.py`.
+- [X] T005 [P] Implement version discovery that scans immediate subfolders for `<tool-version>/PerformanceLog/*.log` in `src/services/version_discovery.py`.
+- [X] T006 Add single-zip upload structure validator enforcing `<tool-version>/PerformanceLog/*.log` in `src/services/upload_validator.py`.
+- [X] T007 [P] Add logging/tracing helper to record selections, uploads, and errors with timestamps in `src/lib/logging.py`.
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -44,10 +44,10 @@
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Wire `spm.py` to require validated base path and optional preselected versions, invoking discovery/validation before comparison start.
-- [ ] T009 [P] [US1] Expose versions listing endpoint/handler (`GET /versions`) using discovery service in `src/cli/api.py` (Flask route) or equivalent CLI command in `spm.py`.
-- [ ] T010 [US1] Implement selection validation enforcing 2–4 unique versions with clear errors in `src/services/selection_service.py`.
-- [ ] T011 [US1] Implement comparison initiation to load selected versions and label outputs in `src/services/comparison_service.py`.
+- [X] T008 [US1] Wire `spm.py` to require validated base path and optional preselected versions, invoking discovery/validation before comparison start.
+- [X] T009 [P] [US1] Expose versions listing endpoint/handler (`GET /versions`) using discovery service in `src/cli/api.py` (Flask route) or equivalent CLI command in `spm.py`.
+- [X] T010 [US1] Implement selection validation enforcing 2–4 unique versions with clear errors in `src/services/selection_service.py`.
+- [X] T011 [US1] Implement comparison initiation to load selected versions and label outputs in `src/services/comparison_service.py`.
 
 **Checkpoint**: User Story 1 should be fully functional and testable independently
 
@@ -61,9 +61,9 @@
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Add comparison refresh flow to rerun with new selections without restarting in `src/services/comparison_service.py`.
-- [ ] T013 [P] [US2] Add CLI/endpoint handler to accept updated selections and trigger refresh with a 5-second target in `spm.py` or `src/cli/api.py`.
-- [ ] T014 [US2] Ensure comparison cache/state resets between runs to avoid stale metrics in `src/services/comparison_service.py`.
+- [X] T012 [US2] Add comparison refresh flow to rerun with new selections without restarting in `src/services/comparison_service.py`.
+- [X] T013 [P] [US2] Add CLI/endpoint handler to accept updated selections and trigger refresh with a 5-second target in `spm.py` or `src/cli/api.py`.
+- [X] T014 [US2] Ensure comparison cache/state resets between runs to avoid stale metrics in `src/services/comparison_service.py`.
 
 **Checkpoint**: User Stories 1 AND 2 should both work independently
 
@@ -77,10 +77,10 @@
 
 ### Implementation for User Story 3
 
-- [ ] T015 [US3] Implement single-zip upload endpoint/CLI command using the validator to enforce `<tool-version>/PerformanceLog/*.log` in `src/cli/uploads.py` (or `spm.py` handler).
-- [ ] T016 [P] [US3] Add checks for missing logs per version and surface actionable errors in `src/services/version_discovery.py`.
-- [ ] T017 [US3] Implement schema/metric conflict detection with user-facing guidance in `src/services/comparison_service.py`.
-- [ ] T018 [P] [US3] Emit structured logs for rejected uploads and invalid versions in `src/lib/logging.py`.
+- [X] T015 [US3] Implement single-zip upload endpoint/CLI command using the validator to enforce `<tool-version>/PerformanceLog/*.log` in `src/cli/uploads.py` (or `spm.py` handler).
+- [X] T016 [P] [US3] Add checks for missing logs per version and surface actionable errors in `src/services/version_discovery.py`.
+- [X] T017 [US3] Implement schema/metric conflict detection with user-facing guidance in `src/services/comparison_service.py`.
+- [X] T018 [P] [US3] Emit structured logs for rejected uploads and invalid versions in `src/lib/logging.py`.
 
 **Checkpoint**: All user stories should now be independently functional
 
@@ -90,8 +90,8 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T019 [P] Update usage docs with CLI flags, upload rules, and examples in `specs/002-user-version-compare/quickstart.md` and `README.md`.
-- [ ] T020 Run end-to-end CLI/API smoke validation for SC-001 to SC-007 and capture notes in `docs/validation.md`.
+- [X] T019 [P] Update usage docs with CLI flags, upload rules, and examples in `specs/002-user-version-compare/quickstart.md` and `README.md`.
+- [X] T020 Run end-to-end CLI/API smoke validation for SC-001 to SC-007 and capture notes in `docs/validation.md`.
 
 ---
 
