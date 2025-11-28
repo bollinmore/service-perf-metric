@@ -567,7 +567,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
               message = `${message} ${guidance}`.trim();
             } else if (response.status === 400) {
               const guidance =
-                "Import expects either a dataset folder (use the folder picker) or a ZIP that contains the dataset root with at least three version folders, each holding a PerformanceLog directory. Please pick a valid dataset and try again.";
+                "Import expects either a dataset folder (use the folder picker) or a ZIP that contains the dataset root with at least one version folder holding a PerformanceLog directory. Please pick a valid dataset and try again.";
               message = `${message} ${guidance}`.trim();
             }
             throw new Error(message);

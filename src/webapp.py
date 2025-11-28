@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tempfile
+import logging
 from html import escape
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -42,6 +43,20 @@ if DEFAULT_DATA_DIR.is_absolute():
 else:
     DATA_BASE_DIR = (PROJECT_ROOT / DEFAULT_DATA_DIR).resolve()
 RECYCLE_DIR = PROJECT_ROOT / "recycle"
+LOG_DIR = PROJECT_ROOT / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_LOG_PATH = LOG_DIR / "upload.log"
+
+UPLOAD_LOGGER = logging.getLogger("spm.upload")
+if not UPLOAD_LOGGER.handlers:
+    handler = logging.FileHandler(UPLOAD_LOG_PATH, encoding="utf-8")
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    UPLOAD_LOGGER.addHandler(handler)
+    UPLOAD_LOGGER.setLevel(logging.INFO)
+    UPLOAD_LOGGER.propagate = False
 
 app = Flask(
     __name__,
@@ -75,6 +90,13 @@ def _resolve_result_base_dir() -> Path:
     if env_value:
         return Path(env_value)
     return Path(__file__).resolve().parent.parent / "result"
+
+
+def _log_upload_event(status: str, dataset: str | None, reason: str, extra: Dict[str, object] | None = None) -> None:
+    payload = {"status": status, "dataset": dataset or "", "reason": reason}
+    if extra:
+        payload.update(extra)
+    UPLOAD_LOGGER.info(json.dumps(payload, ensure_ascii=True))
 
 
 # Base directory that holds generated CSV outputs
@@ -417,10 +439,42 @@ def _validate_import_candidate(dataset_root: Path) -> None:
             continue
         version_dirs[version_dir.as_posix()] = version_dir
 
-    if len(version_dirs) < 3:
+    if len(version_dirs) < 1:
         raise ValueError(
-            "Dataset must contain at least three version folders each containing a PerformanceLog directory."
+            "Dataset must contain at least one version folder with a PerformanceLog directory."
         )
+    # Verify each version has at least one .log
+    missing_logs = [
+        v for v in version_dirs.values() if not any((v / "PerformanceLog").glob("*.log"))
+    ]
+    if missing_logs:
+        raise ValueError(
+            f"Missing log files under PerformanceLog for: {', '.join(v.name for v in missing_logs)}"
+        )
+
+
+def _normalize_dataset_root(dataset_root: Path) -> Path:
+    """If the dataset root itself contains PerformanceLog, wrap it into a version folder."""
+    direct_plog = dataset_root / "PerformanceLog"
+    if direct_plog.is_dir():
+        version_name = dataset_root.name
+        version_dir = dataset_root / version_name
+        version_dir.mkdir(parents=True, exist_ok=True)
+        # Move all contents except the new version_dir into it
+        for child in list(dataset_root.iterdir()):
+            if child == version_dir:
+                continue
+            shutil.move(str(child), version_dir / child.name)
+        UPLOAD_LOGGER.info(
+            json.dumps(
+                {
+                    "status": "normalize",
+                    "dataset": dataset_root.name,
+                    "reason": "Wrapped root PerformanceLog into version folder",
+                }
+            )
+        )
+    return dataset_root
 
 
 def _handle_zip_upload(file_storage, tmp_path: Path, provided_name: str | None) -> Tuple[str, Path]:
@@ -560,6 +614,7 @@ def import_dataset() -> Tuple[Response, int]:
     file_storage = request.files.get("file")
     folder_files = request.files.getlist("folder")
     provided_name = request.form.get("datasetName") if request.form else None
+    dataset_hint = provided_name or ""
 
     dataset_name: str | None = None
     data_root: Path | None = None
@@ -577,22 +632,28 @@ def import_dataset() -> Tuple[Response, int]:
                     folder_files, tmp_path, provided_name
                 )
             except ValueError as exc:
+                _log_upload_event("reject", dataset_hint, str(exc))
                 abort(400, str(exc))
         else:
+            _log_upload_event("reject", dataset_hint, "Missing dataset archive or folder.")
             abort(400, "Missing dataset archive or folder.")
 
         if extracted_root is None or dataset_name is None:
             abort(500, "Failed to process uploaded dataset.")
 
+        extracted_root = _normalize_dataset_root(extracted_root)
+
         try:
             _validate_import_candidate(extracted_root)
         except ValueError as exc:
+            _log_upload_event("reject", dataset_name, str(exc))
             abort(400, str(exc))
 
         data_root = DATA_BASE_DIR / dataset_name
         result_root = RESULT_BASE_DIR / dataset_name
 
         if data_root.exists() or result_root.exists():
+            _log_upload_event("reject", dataset_name, "Dataset already exists")
             abort(409, f"Dataset '{dataset_name}' already exists.")
 
         data_root.parent.mkdir(parents=True, exist_ok=True)
@@ -605,11 +666,13 @@ def import_dataset() -> Tuple[Response, int]:
 
     try:
         generate_reports(data_root, result_root)
+        _log_upload_event("success", dataset_name, "Dataset imported", {"path": str(data_root)})
     except Exception as exc:  # pragma: no cover - defensive cleanup
         if data_root and data_root.exists():
             shutil.rmtree(data_root, ignore_errors=True)
         if result_root and result_root.exists():
             shutil.rmtree(result_root, ignore_errors=True)
+        _log_upload_event("error", dataset_name, f"Failed to process dataset: {exc}")
         abort(500, f"Failed to process dataset: {exc}")
 
     return (
