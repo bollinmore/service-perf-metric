@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -127,7 +127,7 @@ class ModeService:
         return self._resolution.docker_forced
 
     def capture_snapshot(self, notes: str | None = None) -> VersionSnapshot:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         snapshot_id = now.strftime("dev-%Y%m%d-%H%M%S")
         snapshot = VersionSnapshot(id=snapshot_id, timestamp=now, notes=notes)
         self._status.snapshot = snapshot

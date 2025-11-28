@@ -17,9 +17,9 @@
 
 **Purpose**: Ensure baseline config and tooling for temp outputs and logging.
 
-- [ ] T001 Define temp output root and latest-pointer constants in `src/config/paths.py`
-- [ ] T002 [P] Add comparison run ID generator utility in `src/lib/run_ids.py`
-- [ ] T003 [P] Ensure logging configuration supports comparison operations in `src/lib/logging_config.py`
+- [X] T001 Define temp output root and latest-pointer constants in `src/config/paths.py`
+- [X] T002 [P] Add comparison run ID generator utility in `src/lib/run_ids.py`
+- [X] T003 [P] Ensure logging configuration supports comparison operations in `src/lib/logging_config.py`
 
 ---
 
@@ -29,10 +29,10 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T004 Implement version pool scanner (list versions, statuses, summaries) in `src/services/version_pool.py`
-- [ ] T005 [P] Add validation helpers for “exactly three distinct versions” and missing artifacts in `src/services/validation.py`
-- [ ] T006 [P] Create temp storage manager (create `result/<data-folder>/temp/<run-id>/`, manage `latest`) in `src/services/temp_storage.py`
-- [ ] T007 Seed shared test fixtures for data folders, summaries, and missing PerformanceLog cases in `tests/conftest.py`
+- [X] T004 Implement version pool scanner (list versions, statuses, summaries) in `src/services/version_pool.py`
+- [X] T005 [P] Add validation helpers for “exactly three distinct versions” and missing artifacts in `src/services/validation.py`
+- [X] T006 [P] Create temp storage manager (create `result/<data-folder>/temp/<run-id>/`, manage `latest`) in `src/services/temp_storage.py`
+- [X] T007 Seed shared test fixtures for data folders, summaries, and missing PerformanceLog cases in `tests/conftest.py`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -46,18 +46,18 @@
 
 ### Tests for User Story 1
 
-- [ ] T008 [P] [US1] Contract test for `POST /comparisons` in `tests/contract/test_comparisons_post.py`
-- [ ] T009 [P] [US1] CLI integration test for `compare --data-folder <pool> --versions v1 v2 v3` in `tests/integration/test_cli_compare.py`
-- [ ] T010 [P] [US1] Validation test for missing PerformanceLog or missing version in `tests/unit/test_validation.py`
+- [X] T008 [P] [US1] Contract test for `POST /comparisons` in `tests/contract/test_comparisons_post.py`
+- [X] T009 [P] [US1] CLI integration test for `compare --data-folder <pool> --versions v1 v2 v3` in `tests/integration/test_cli_compare.py`
+- [X] T010 [P] [US1] Validation test for missing PerformanceLog or missing version in `tests/unit/test_validation.py`
 
 ### Implementation for User Story 1
 
-- [ ] T011 [P] [US1] Expose version listing via `GET /versions` using pool scanner in `src/api/routes/versions.py`
-- [ ] T012 [US1] Implement comparison request handler `POST /comparisons` with validation and run creation in `src/api/routes/comparisons.py`
-- [ ] T013 [P] [US1] Implement comparison orchestrator (validation → temp run directory → generate `summary.csv`, `summary_stats.csv`, `service_stats.csv`) in `src/services/comparison.py`
-- [ ] T014 [US1] Update CLI to require exactly three versions and call comparison API in `src/cli/commands/compare.py`
-- [ ] T015 [US1] Ensure comparison generation fails fast on missing artifacts and reports clear error messages in `src/services/comparison.py`
-- [ ] T016 [US1] Wire logging for comparison runs (inputs, run-id, temp paths, errors) in `src/lib/logging_config.py`
+- [X] T011 [P] [US1] Expose version listing via `GET /versions` using pool scanner in `src/api/routes/versions.py`
+- [X] T012 [US1] Implement comparison request handler `POST /comparisons` with validation and run creation in `src/api/routes/comparisons.py`
+- [X] T013 [P] [US1] Implement comparison orchestrator (validation → temp run directory → generate `summary.csv`, `summary_stats.csv`, `service_stats.csv`) in `src/services/comparison.py`
+- [X] T014 [US1] Update CLI to require exactly three versions and call comparison API in `src/cli/commands/compare.py`
+- [X] T015 [US1] Ensure comparison generation fails fast on missing artifacts and reports clear error messages in `src/services/comparison.py`
+- [X] T016 [US1] Wire logging for comparison runs (inputs, run-id, temp paths, errors) in `src/lib/logging_config.py`
 
 **Checkpoint**: User Story 1 fully functional and testable independently
 
@@ -71,16 +71,16 @@
 
 ### Tests for User Story 2
 
-- [ ] T017 [P] [US2] Contract test for `GET /comparisons/latest` in `tests/contract/test_comparisons_latest.py`
-- [ ] T018 [P] [US2] Integration test for download/visualization fallback when no latest comparison exists in `tests/integration/test_visualization_fallback.py`
+- [X] T017 [P] [US2] Contract test for `GET /comparisons/latest` in `tests/contract/test_comparisons_latest.py`
+- [X] T018 [P] [US2] Integration test for download/visualization fallback when no latest comparison exists in `tests/integration/test_visualization_fallback.py`
 
 ### Implementation for User Story 2
 
-- [ ] T019 [P] [US2] Implement `GET /comparisons/latest` to return selected versions, status, and temp paths in `src/api/routes/comparisons.py`
-- [ ] T020 [US2] Update visualization/data-access layer to read `result/<data-folder>/temp/latest/` outputs in `src/services/visualization.py`
-- [ ] T021 [US2] Update download handlers to serve temp comparison files or prompt selection when missing in `src/api/routes/downloads.py`
-- [ ] T022 [US2] Update UI workflow to request versions from pool, submit three-version selection, and reload outputs in `src/ui/views/comparison.py`
-- [ ] T023 [US2] Update CLI download/view commands to prefer temp outputs and prompt when absent in `src/cli/commands/download.py`
+- [X] T019 [P] [US2] Implement `GET /comparisons/latest` to return selected versions, status, and temp paths in `src/api/routes/comparisons.py`
+- [X] T020 [US2] Update visualization/data-access layer to read `result/<data-folder>/temp/latest/` outputs in `src/services/visualization.py`
+- [X] T021 [US2] Update download handlers to serve temp comparison files or prompt selection when missing in `src/api/routes/downloads.py`
+- [X] T022 [US2] Update UI workflow to request versions from pool, submit three-version selection, and reload outputs in `src/ui/views/comparison.py`
+- [X] T023 [US2] Update CLI download/view commands to prefer temp outputs and prompt when absent in `src/cli/commands/download.py`
 
 **Checkpoint**: User Story 2 fully functional and testable independently
 
@@ -94,16 +94,16 @@
 
 ### Tests for User Story 3
 
-- [ ] T024 [P] [US3] Regression test to ensure generate flow only creates per-version summaries in `tests/integration/test_generate_single_version.py`
-- [ ] T025 [P] [US3] Concurrency/isolation test for overlapping comparisons and latest-pointer updates in `tests/integration/test_comparison_isolation.py`
-- [ ] T026 [P] [US3] Non-overwrite test for per-version summaries across multiple comparisons in `tests/unit/test_temp_storage.py`
+- [X] T024 [P] [US3] Regression test to ensure generate flow only creates per-version summaries in `tests/integration/test_generate_single_version.py`
+- [X] T025 [P] [US3] Concurrency/isolation test for overlapping comparisons and latest-pointer updates in `tests/integration/test_comparison_isolation.py`
+- [X] T026 [P] [US3] Non-overwrite test for per-version summaries across multiple comparisons in `tests/unit/test_temp_storage.py`
 
 ### Implementation for User Story 3
 
-- [ ] T027 [US3] Refactor generate/read workflow to emit only per-version `summary.csv` in `src/services/generate.py`
-- [ ] T028 [P] [US3] Add cleanup policy: on successful comparison, delete previous temp run folder after updating `latest` in `src/services/temp_storage.py`
-- [ ] T029 [US3] Protect per-version summaries from modification during comparisons (read-only enforcement) in `src/services/comparison.py`
-- [ ] T030 [US3] Ensure non-comparison flows (refresh, single-view) never create/update cross-version outputs in `src/api/routes/versions.py`
+- [X] T027 [US3] Refactor generate/read workflow to emit only per-version `summary.csv` in `src/services/generate.py`
+- [X] T028 [P] [US3] Add cleanup policy: on successful comparison, delete previous temp run folder after updating `latest` in `src/services/temp_storage.py`
+- [X] T029 [US3] Protect per-version summaries from modification during comparisons (read-only enforcement) in `src/services/comparison.py`
+- [X] T030 [US3] Ensure non-comparison flows (refresh, single-view) never create/update cross-version outputs in `src/api/routes/versions.py`
 
 **Checkpoint**: All user stories independently functional; pool integrity protected
 
@@ -111,10 +111,10 @@
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T031 [P] Refresh quickstart with new compare flow and temp paths in `specs/003-three-version-compare/quickstart.md`
-- [ ] T032 [P] Update README/docs/quickstart usage examples for CLI/API/UI selection rules in `README.md`
-- [ ] T033 [P] Add logging/monitoring notes for comparison runs and temp cleanup in `docs/observability.md`
-- [ ] T034 Run full regression of CLI/API/UI compare and download flows following quickstart in `tests/regression/test_compare_end_to_end.py`
+- [X] T031 [P] Refresh quickstart with new compare flow and temp paths in `specs/003-three-version-compare/quickstart.md`
+- [X] T032 [P] Update README/docs/quickstart usage examples for CLI/API/UI selection rules in `README.md`
+- [X] T033 [P] Add logging/monitoring notes for comparison runs and temp cleanup in `docs/observability.md`
+- [X] T034 Run full regression of CLI/API/UI compare and download flows following quickstart in `tests/regression/test_compare_end_to_end.py`
 
 ---
 

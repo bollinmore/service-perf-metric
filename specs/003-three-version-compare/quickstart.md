@@ -6,21 +6,23 @@
 - CLI/API/UI access to the service.
 
 ## Generate per-version summaries (no cross-version output)
-1. Place or refresh version data under `data/<pool-name>/<version-id>/`.
-2. Run the generate/read workflow to emit per-version `summary.csv` only. Cross-version reports are not produced in this step.
-3. Verify each version is marked available (per CLI/API status) before comparison.
+1. Place or refresh version data under `data/<pool-name>/<version-id>/PerformanceLog/*.log`.
+2. Run the generate workflow (`python spm.py generate --data-folder <pool-name>`) to emit per-version `summary.csv` only. Cross-version outputs (`summary.csv`, `summary_stats.csv`, `service_stats.csv` at the pool root) are **not** produced here.
+3. Verify each version is marked available via API (`GET /versions?data_folder=<pool-name>`) before comparison.
 
 ## Run a three-version comparison
 1. List available versions:
    - CLI: `... list-versions --data-folder <pool-name>`
    - API: `GET /versions?data_folder=<pool-name>`
 2. Trigger comparison with exactly three distinct versions:
-   - CLI: `... compare --data-folder <pool-name> --versions v1 v2 v3`
+   - CLI: `python -m src.cli.commands.compare --data-folder <pool-name> --versions v1 v2 v3`
    - API: `POST /comparisons` with `{ "data_folder": "<pool-name>", "versions": ["v1", "v2", "v3"] }`
 3. On success, temporary reports are written under `result/<pool-name>/temp/<run-id>/` and promoted via `result/<pool-name>/temp/latest/`.
 
 ## Consume comparison outputs
 - Downloads/visualizations should read from `result/<pool-name>/temp/latest/summary.csv`, `summary_stats.csv`, and `service_stats.csv`.
+- CLI download helper: `python -m src.cli.commands.download --data-folder <pool-name> --file summary`
+- API: `GET /comparisons/latest?data_folder=<pool-name>` for metadata; `GET /downloads/comparison?data_folder=<pool-name>&file=summary` for files.
 - If no latest comparison exists, the system prompts for a three-version selection instead of serving stale data.
 
 ## Validation rules and errors
