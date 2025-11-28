@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import logging
 import shutil
@@ -175,18 +176,12 @@ def _combine_summaries(summary_map: Dict[str, Path], output_path: Path) -> None:
 
 
 def generate_reports(data_root: Path, result_root: Path, allowed_versions: List[str] | None = None) -> None:
-    """Parse logs under data_root and produce CSV summaries in result_root."""
-    result_root.mkdir(parents=True, exist_ok=True)
+    """Parse logs under data_root and produce per-version CSV summaries in result_root.
 
-    summary_marker = result_root / "summary.csv"
-    if summary_marker.exists():
-        note = (
-            f"Existing outputs detected for '{data_root.name}' at {result_root}; "
-            "reusing previous artifacts for charts"
-        )
-        print(f"[generate] {note}")
-        FILE_LOGGER.info(note)
-        return
+    Cross-version outputs (summary.csv, summary_stats.csv, service_stats.csv) are NOT
+    generated here; they are produced only by explicit comparison runs.
+    """
+    result_root.mkdir(parents=True, exist_ok=True)
 
     datasets = _collect_log_dirs(data_root, allowed_versions=allowed_versions)
     if not datasets:
@@ -218,37 +213,15 @@ def generate_reports(data_root: Path, result_root: Path, allowed_versions: List[
         print("[generate] No summaries generated")
         FILE_LOGGER.warning("No summaries generated")
         return
-
-    combined_path = summary_marker
-    _combine_summaries(summary_paths, combined_path)
-
-    env = os.environ.copy()
-    env["SPM_RESULT_ROOT"] = str(result_root)
-
-    try:
-        subprocess.run(
-            [sys.executable, str(BASE_DIR / "src" / "report.py")],
-            check=True,
-            cwd=BASE_DIR,
-            env=env,
-        )
-    except subprocess.CalledProcessError as exc:
-        print(f"[generate] report.py failed: {exc}")
-        FILE_LOGGER.error(f"report_failed returncode={exc.returncode} error={exc}")
-        raise SystemExit(exc.returncode) from exc
-
-    print(f"[generate] Completed report generation ({total_rows} total rows)")
+    print(f"[generate] Completed per-version summaries ({total_rows} total rows); cross-version reports deferred to comparison runs.")
     FILE_LOGGER.info(
         json.dumps(
             {
-                "event": "report_complete",
+                "event": "per_version_summaries_complete",
                 "data_root": str(data_root),
                 "result_root": str(result_root),
                 "versions": list(summary_paths.keys()),
                 "total_rows": total_rows,
-                "summary": str(combined_path),
-                "service_stats": str(result_root / "service_stats.csv"),
-                "summary_stats": str(result_root / "summary_stats.csv"),
             }
         )
     )
