@@ -79,8 +79,14 @@ def resolve_data_folder(explicit: Path | None) -> Path:
 
 def configure_logging(name: str = "spm", level: Optional[str] = None) -> logging.Logger:
     """Configure a root logger with sane defaults for CLI and services."""
-    logging.basicConfig(
-        level=getattr(logging, (level or os.environ.get("SPM_LOG_LEVEL", DEFAULT_LOG_LEVEL)).upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    )
-    return logging.getLogger(name)
+    log_level = getattr(logging, (level or os.environ.get("SPM_LOG_LEVEL", DEFAULT_LOG_LEVEL)).upper(), logging.INFO)
+    root_logger = logging.getLogger(name)
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+        )
+        root_logger.addHandler(handler)
+    root_logger.setLevel(log_level)
+    root_logger.propagate = False
+    return root_logger

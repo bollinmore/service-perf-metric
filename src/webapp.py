@@ -92,6 +92,13 @@ def _resolve_result_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "result"
 
 
+def _dataset_paths(dataset_name: str) -> Tuple[Path, Path]:
+    """Resolve data/result paths, avoiding double-appending the base folder name."""
+    if dataset_name == DATA_BASE_DIR.name:
+        return DATA_BASE_DIR, RESULT_BASE_DIR / dataset_name
+    return DATA_BASE_DIR / dataset_name, RESULT_BASE_DIR / dataset_name
+
+
 def _log_upload_event(status: str, dataset: str | None, reason: str, extra: Dict[str, object] | None = None) -> None:
     payload = {"status": status, "dataset": dataset or "", "reason": reason}
     if extra:
@@ -477,6 +484,24 @@ def _normalize_dataset_root(dataset_root: Path) -> Path:
     return dataset_root
 
 
+def _collect_version_dirs(dataset_root: Path) -> List[Path]:
+    versions: List[Path] = []
+    for plog_dir in dataset_root.rglob("*"):
+        if not plog_dir.is_dir():
+            continue
+        if plog_dir.name.lower() != "performancelog":
+            continue
+        version_dir = plog_dir.parent
+        try:
+            version_dir.relative_to(dataset_root)
+        except ValueError:
+            continue
+        if version_dir == dataset_root:
+            continue
+        versions.append(version_dir)
+    return versions
+
+
 def _handle_zip_upload(file_storage, tmp_path: Path, provided_name: str | None) -> Tuple[str, Path]:
     archive_name = secure_filename(file_storage.filename or "")
     if not archive_name or not archive_name.lower().endswith(".zip"):
@@ -649,17 +674,47 @@ def import_dataset() -> Tuple[Response, int]:
             _log_upload_event("reject", dataset_name, str(exc))
             abort(400, str(exc))
 
-        data_root = DATA_BASE_DIR / dataset_name
-        result_root = RESULT_BASE_DIR / dataset_name
+        extracted_versions = _collect_version_dirs(extracted_root)
+
+        # Prefer merging into existing "data" dataset or the sole existing dataset when names differ
+        existing = _available_datasets()
+        target_dataset = dataset_name
+        if target_dataset not in existing and extracted_versions:
+            if "data" in existing:
+                target_dataset = "data"
+            elif len(existing) == 1:
+                target_dataset = existing[0]
+
+        dataset_name = target_dataset
+        data_root, result_root = _dataset_paths(dataset_name)
 
         if data_root.exists() or result_root.exists():
-            _log_upload_event("reject", dataset_name, "Dataset already exists")
-            abort(409, f"Dataset '{dataset_name}' already exists.")
-
-        data_root.parent.mkdir(parents=True, exist_ok=True)
-        RESULT_BASE_DIR.mkdir(parents=True, exist_ok=True)
-
-        shutil.move(str(extracted_root), data_root)
+            # Handle stale result with missing data by removing stale result to allow recreate
+            if not data_root.exists() and result_root.exists():
+                shutil.rmtree(result_root, ignore_errors=True)
+                _log_upload_event("info", dataset_name, "Removed stale result to recreate dataset")
+            if data_root.exists():
+                new_versions = []
+                for vdir in extracted_versions:
+                    target = data_root / vdir.name
+                    if target.exists():
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(vdir), target)
+                    new_versions.append(target.name)
+                if not new_versions:
+                    _log_upload_event("reject", dataset_name, "No new versions to merge")
+                    abort(409, f"Dataset '{dataset_name}' already exists and no new versions to add.")
+                _log_upload_event("merge", dataset_name, "Merged new versions", {"versions": new_versions})
+        else:
+            data_root.parent.mkdir(parents=True, exist_ok=True)
+            RESULT_BASE_DIR.mkdir(parents=True, exist_ok=True)
+            moved = False
+            for child in extracted_root.iterdir():
+                shutil.move(str(child), data_root / child.name)
+                moved = True
+            if not moved:
+                shutil.move(str(extracted_root), data_root)
 
     if data_root is None or result_root is None:
         abort(500, "Failed to process uploaded dataset.")

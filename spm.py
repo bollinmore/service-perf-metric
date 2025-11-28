@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import logging
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,12 @@ from typing import Dict, Iterable, List, Tuple
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = BASE_DIR / "data"
 DEFAULT_RESULT_DIR = BASE_DIR / "result"
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+RUN_LOG = LOG_DIR / "run.log"
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+RUN_LOG = LOG_DIR / "run.log"
 
 
 def result_root_for_data(data_root: Path) -> Path:
@@ -39,6 +46,20 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import guard
 ENV_PATH = config.load_env(BASE_DIR / ".env")
 MODE_SERVICE = get_mode_service(BASE_DIR)
 LOGGER = config.configure_logging()
+FILE_LOGGER = logging.getLogger("spm.runfile")
+if not FILE_LOGGER.handlers:
+    fh = logging.FileHandler(RUN_LOG, encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    FILE_LOGGER.addHandler(fh)
+    FILE_LOGGER.setLevel(logging.INFO)
+    FILE_LOGGER.propagate = False
+FILE_LOGGER = logging.getLogger("spm.runfile")
+if not FILE_LOGGER.handlers:
+    fh = logging.FileHandler(RUN_LOG, encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    FILE_LOGGER.addHandler(fh)
+    FILE_LOGGER.setLevel(logging.INFO)
+    FILE_LOGGER.propagate = False
 
 
 def _resolve_path(path_str: str, default: Path) -> Path:
@@ -159,15 +180,19 @@ def generate_reports(data_root: Path, result_root: Path, allowed_versions: List[
 
     summary_marker = result_root / "summary.csv"
     if summary_marker.exists():
-        print(
-            f"[generate] Existing outputs detected for '{data_root.name}' at {result_root}; "
+        note = (
+            f"Existing outputs detected for '{data_root.name}' at {result_root}; "
             "reusing previous artifacts for charts"
         )
+        print(f"[generate] {note}")
+        FILE_LOGGER.info(note)
         return
 
     datasets = _collect_log_dirs(data_root, allowed_versions=allowed_versions)
     if not datasets:
-        print(f"[generate] No PerformanceLog folders found under {data_root}")
+        msg = f"No PerformanceLog folders found under {data_root}"
+        print(f"[generate] {msg}")
+        FILE_LOGGER.warning(msg)
         return
 
     summary_paths: Dict[str, Path] = {}
@@ -184,11 +209,14 @@ def generate_reports(data_root: Path, result_root: Path, allowed_versions: List[
             summary_paths[dataset_name] = out_path
             total_rows += rows
             print(f"[generate] {dataset_name}: wrote {rows} rows to {out_path}")
+            FILE_LOGGER.info(f"summary_written dataset={dataset_name} rows={rows} path={out_path}")
         else:
             print(f"[generate] {dataset_name}: no matches (pattern {pattern})")
+            FILE_LOGGER.warning(f"summary_empty dataset={dataset_name} pattern={pattern}")
 
     if not summary_paths:
         print("[generate] No summaries generated")
+        FILE_LOGGER.warning("No summaries generated")
         return
 
     combined_path = summary_marker
@@ -206,9 +234,24 @@ def generate_reports(data_root: Path, result_root: Path, allowed_versions: List[
         )
     except subprocess.CalledProcessError as exc:
         print(f"[generate] report.py failed: {exc}")
+        FILE_LOGGER.error(f"report_failed returncode={exc.returncode} error={exc}")
         raise SystemExit(exc.returncode) from exc
 
     print(f"[generate] Completed report generation ({total_rows} total rows)")
+    FILE_LOGGER.info(
+        json.dumps(
+            {
+                "event": "report_complete",
+                "data_root": str(data_root),
+                "result_root": str(result_root),
+                "versions": list(summary_paths.keys()),
+                "total_rows": total_rows,
+                "summary": str(combined_path),
+                "service_stats": str(result_root / "service_stats.csv"),
+                "summary_stats": str(result_root / "summary_stats.csv"),
+            }
+        )
+    )
 
 
 def _merge_single_source(
