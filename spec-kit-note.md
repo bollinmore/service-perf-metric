@@ -20,14 +20,22 @@
 
 ---
 
-# 002-
+# 002-user-version-compare
 
 ## specify
 
+修改目前測試資料的檔案結構，不再使用指定 data folder 固定讀取其中三個資料夾的測試紀錄，而是交由使用者決定要比較的版本。
 
 ## clarify
 
 ## plan
+
+spm.py 啟動的時候要指定 data folder, 也可以另外指定要比較的版本例如： --versions 2.0.1.0,2.0.1.2,2.0.1.3
+每一個版本的測試資料必須要符合以下目錄結構：
+<tool-version>
+  - PerformanceLog
+    - *.log
+3. 修改上傳檔案的邏輯，使其一次指定一個 zip 並且其中要符合上述目錄結構。
 
 ## checklist
 
