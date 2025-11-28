@@ -1,0 +1,145 @@
+openapi: 3.0.3
+info:
+  title: Three-Version Comparison API
+  version: "0.1.0"
+paths:
+  /versions:
+    get:
+      summary: List available versions in the data pool
+      parameters:
+        - in: query
+          name: data_folder
+          required: true
+          schema:
+            type: string
+          description: Data folder representing the version pool.
+      responses:
+        "200":
+          description: Versions available for selection.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data_folder:
+                    type: string
+                  versions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        version_id:
+                          type: string
+                        status:
+                          type: string
+                          enum: [available, missing_artifacts, corrupted]
+                        summary_path:
+                          type: string
+                        last_updated:
+                          type: string
+                          format: date-time
+        "404":
+          description: Data folder not found.
+  /comparisons:
+    post:
+      summary: Create a temporary three-version comparison
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data_folder, versions]
+              properties:
+                data_folder:
+                  type: string
+                versions:
+                  type: array
+                  minItems: 3
+                  maxItems: 3
+                  uniqueItems: true
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Comparison created; temp reports generated or in progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                  data_folder:
+                    type: string
+                  selected_versions:
+                    type: array
+                    minItems: 3
+                    maxItems: 3
+                    items:
+                      type: string
+                  status:
+                    type: string
+                    enum: [pending, completed]
+                  temp_location:
+                    type: string
+                    description: Base path like result/<data-folder>/temp/<run-id>/
+                  latest_pointer:
+                    type: string
+                    description: Path for the promoted latest comparison outputs.
+                  outputs:
+                    type: object
+                    properties:
+                      summary:
+                        type: string
+                      summary_stats:
+                        type: string
+                      service_stats:
+                        type: string
+        "400":
+          description: Invalid request (not exactly three distinct versions, duplicates, or missing versions/artifacts).
+        "404":
+          description: Data folder not found.
+  /comparisons/latest:
+    get:
+      summary: Get the latest temporary comparison for a data folder
+      parameters:
+        - in: query
+          name: data_folder
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Latest comparison metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                  data_folder:
+                    type: string
+                  selected_versions:
+                    type: array
+                    minItems: 3
+                    maxItems: 3
+                    items:
+                      type: string
+                  status:
+                    type: string
+                    enum: [pending, completed, failed]
+                  temp_location:
+                    type: string
+                  outputs:
+                    type: object
+                    properties:
+                      summary:
+                        type: string
+                      summary_stats:
+                        type: string
+                      service_stats:
+                        type: string
+        "404":
+          description: No comparison exists for the data folder.
