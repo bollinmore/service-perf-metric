@@ -1,0 +1,134 @@
+openapi: 3.0.0
+info:
+  title: Version Comparison API
+  version: 0.1.0
+paths:
+  /versions:
+    get:
+      summary: List available test-data versions
+      responses:
+        '200':
+          description: Versions discovered under the configured base path
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  basePath:
+                    type: string
+                  versions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        path:
+                          type: string
+                        schemaVersion:
+                          type: string
+                        recordCount:
+                          type: integer
+  /comparisons:
+    post:
+      summary: Start a comparison for selected versions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - versions
+              properties:
+                versions:
+                  type: array
+                  minItems: 2
+                  maxItems: 4
+                  uniqueItems: true
+                  items:
+                    type: string
+                    description: Version name
+      responses:
+        '202':
+          description: Comparison accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  comparisonId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [pending, running, completed, error]
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: Invalid selection (e.g., too few/many, missing data, schema conflict)
+  /comparisons/{comparisonId}:
+    get:
+      summary: Fetch comparison status and results
+      parameters:
+        - in: path
+          name: comparisonId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Comparison status and results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  comparisonId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [pending, running, completed, error]
+                  selectedVersions:
+                    type: array
+                    items:
+                      type: string
+  /uploads:
+    post:
+      summary: Upload a single version package zip
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '202':
+          description: Upload accepted for validation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [validating, accepted, rejected]
+        '400':
+          description: Invalid package (missing `<tool-version>/PerformanceLog/*.log` or multiple top-level versions)
+                  metrics:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        version:
+                          type: string
+                        values:
+                          type: object
+                  conflicts:
+                    type: array
+                    items:
+                      type: string

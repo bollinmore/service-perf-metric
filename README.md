@@ -7,13 +7,15 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - Install dependencies with `pip install -r requirements.txt`.
 - (Optional) Consolidate multiple raw folders into `data/`:
   - `python spm.py merge data1 data2 data3 --into data`
-- Generate the per-version summaries and aggregated reports (default `--data data`):
-  - `python spm.py generate`
-  - Use a different source folder with `python spm.py generate --data data2`
-  - Outputs are stored under `result/<data-folder>/`; repeated runs reuse existing CSVs
+- Generate the per-version summaries and aggregated reports (requires `--data-folder`):
+  - `python spm.py generate --data-folder data`
+  - Use a different source folder with `python spm.py generate --data-folder data2`
+  - Optional: `--versions 2.0.1.0,2.0.1.2` to limit, `--refresh` to clear old results, `--allow-conflicts` to proceed on mismatched logs.
+  - Outputs are stored under `result/<data-folder>/`; repeated runs reuse existing CSVs unless `--refresh` is set.
 - Start the browser UI (builds reports unless `--no-build` is supplied):
-  - `python spm.py serve`
-  - `python spm.py serve --data data2` (shorthand: `python spm.py serve data2`)
+  - `python spm.py serve --data-folder data`
+  - `python spm.py serve --data-folder data2`
+  - Optional: `--versions ...`, `--refresh`, `--allow-conflicts`
   - Open tables at `http://localhost:6231/`
   - Analytics dashboard at `http://localhost:6231/analytics`
   - Switch datasets through the Average Loading Time card dropdown to compare different `result/<data-folder>` outputs
@@ -38,7 +40,7 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - `src/extract.py` log parser + combiner
 - `src/report.py` stats generator
 - `src/webapp.py` Flask CSV browser
-- `spm.py` entry-point CLI (`clean`, `generate`, `serve`, `merge`)
+- `spm.py` entry-point CLI (`clean`, `generate`, `serve`, `merge`, `versions`, `compare`, `upload`)
 - Docker deployments: forced Production mode by default (`SPM_MODE=production`, `SPM_FORCE_PRODUCTION=1` in Dockerfile/docker-compose) regardless of local `.env`.
 
 ## CI
