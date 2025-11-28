@@ -285,6 +285,22 @@ def serve_webapp(host: str, port: int, debug: bool, result_root: Path, base_resu
         webapp.SUMMARY_FILE = result_root / "summary.csv"
 
     try:
+        production_requested = (
+            os.environ.get("SPM_FORCE_PRODUCTION") == "1" or not debug
+        )
+        if production_requested:
+            try:
+                from waitress import serve as waitress_serve
+            except ImportError:
+                print(
+                    "[serve] Production server requested but 'waitress' is not installed; "
+                    "falling back to Flask development server"
+                )
+            else:
+                print("[serve] Starting production WSGI server via waitress")
+                waitress_serve(webapp.app, host=host, port=port)
+                return
+
         webapp.app.run(host=host, port=port, debug=debug)
     except KeyboardInterrupt:
         print("\n[serve] Shutting down")
