@@ -78,3 +78,55 @@ summary_stats。
 ## analyze
 
 ## implement
+
+---
+
+# 004-version-selector-modal
+
+## specify
+
+title: Replace Dataset dropdown with settings modal (version selector)
+why: |
+  Analysts need a clearer way to pick up to three versions across all datasets; the current Dataset dropdown is limiting and unclear
+for multi-version selection.
+problem: |
+  The Analytics page currently shows a Dataset dropdown on the top-right.
+  Requirement: remove this dropdown and add a gear icon button that opens a modal to choose versions.
+  The modal must list all versions found in datasets under --data-folder and allow selecting up to three versions only.
+context: |
+  Page: Analytics view with a top-right dataset control.
+  Data source: local datasets under --data-folder, each containing version folders.
+  Selection limit: maximum of three versions for comparison.
+constraints:
+  - Remove the top-right Dataset dropdown.
+  - Add a gear icon button in the same area.
+  - Modal lists all versions across datasets under --data-folder.
+  - Prevent selecting more than three versions, with clear feedback.
+acceptance_criteria:
+  - Dataset dropdown is gone; gear icon is present top-right.
+  - Clicking the gear opens a modal listing all versions from --data-folder datasets.
+  - User can select up to three versions; a fourth selection is blocked with clear messaging.
+  - Confirming updates the comparison to use the chosen versions.
+out_of_scope:
+  - Changing how versions are produced or stored under --data-folder.
+  - Unrelated styling changes.
+
+## clarify
+
+## plan
+
+- Locate the Analytics UI that renders the current Dataset dropdown and the code path that supplies available versions.
+- Replace the dropdown element with a gear icon button in the same container/layout.
+- Introduce a settings modal component triggered by the gear button; include selectable version entries.
+- Build the version list by enumerating all datasets under --data-folder and aggregating their version identifiers (dedupe/sort if needed).
+- Implement selection state with a hard cap of three; block additional picks with inline feedback.
+- On confirm, update the comparison state to use the selected versions and close the modal; ensure previous selection is cleared/ replaced as needed.
+- Add/adjust tests or manual checks for gear visibility, modal open/close, version sourcing from --data-folder, and the three-selection limit/feedback.
+
+## checklist
+
+## tasks
+
+## analyze
+
+## implement
