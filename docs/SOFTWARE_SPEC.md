@@ -409,12 +409,12 @@ docker build -t spm-app:latest .
 
 ### 16.2 Run Container (simple)
 
-- Start the app on port 6231 (maps host ./data, ./result, and ./recycle into the container):
+- Start the app on port 6231 (named volume `spm-data` for `/app/data`, host bind mounts for `./result` and `./recycle`):
 
 ```
 docker run --rm -it \
   -p 6231:6231 \
-  -v "$PWD/data:/app/data" \
+  -v spm-data:/app/data \
   -v "$PWD/result:/app/result" \
   -v "$PWD/recycle:/app/recycle" \
   --name spm spm-app:latest
@@ -430,7 +430,7 @@ docker run --rm -it \
 docker compose up --build
 ```
 
-- Default ports: `6231:6231`. Data and results are persisted via bind mounts.
+- Default ports: `6231:6231`. The `/app/data` directory uses the named volume `spm-data` by default (override with `SPM_DATA_VOLUME=/host/path` if you want a host bind mount); results and recycle still bind-mount to the host for easy inspection.
 
 ### 16.4 Environment Variables
 
@@ -440,7 +440,7 @@ docker compose up --build
 
 ### 16.5 Data Workflow in Containers
 
-- To pre-seed raw logs, place them on the host under `./data/<version>/PerformanceLog` before starting the container. The app will parse and generate reports on first run.
+- To reuse an existing host dataset, set `SPM_DATA_VOLUME=$PWD/data docker compose up` (or `DATA_VOLUME=$PWD/data make run`) to bind-mount the folder instead of the default `spm-data` named volume. You can also copy files into the named volume with `docker run --rm -v spm-data:/app/data -v "$PWD/data:/seed:ro" busybox sh -c "cp -r /seed/* /app/data"`.
 - Alternatively, upload datasets at runtime via the UI “Import Dataset” button or the API:
 
 ```

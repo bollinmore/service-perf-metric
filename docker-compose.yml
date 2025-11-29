@@ -12,7 +12,10 @@ services:
       - SPM_RESULT_BASE=/app/result
       - SPM_RESULT_ROOT=/app/result/data
     volumes:
-      - ./data:/app/data
+      - ${SPM_DATA_VOLUME:-spm-data}:/app/data
       - ./result:/app/result
       - ./recycle:/app/recycle
     restart: unless-stopped
+
+volumes:
+  spm-data:

@@ -8,7 +8,8 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Project root is the repo root (one level above src/)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ALLOWED_MODES = {"development", "production"}
 DEFAULT_DATA_FOLDER = PROJECT_ROOT / "data"
 DEFAULT_LOG_LEVEL = "INFO"

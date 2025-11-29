@@ -32,6 +32,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from spm import DEFAULT_DATA_DIR, generate_reports
+from src.config import PROJECT_ROOT as CONFIG_PROJECT_ROOT
 from src.services.mode_service import get_mode_service
 from src.services.validation import ValidationError, require_one_to_three
 from src.services.version_pool import list_versions, require_versions_available
@@ -41,7 +42,8 @@ from src.services.comparison import run_comparison, get_latest_comparison
 # Cached HTML for backend API docs
 _BACKEND_API_CACHE: Dict[str, object] = {"mtime": None, "html": ""}
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Project root from central config (repo root)
+PROJECT_ROOT = CONFIG_PROJECT_ROOT
 ENV_DATA_FOLDER = os.environ.get("SPM_DATA_FOLDER")
 if ENV_DATA_FOLDER:
     DATA_BASE_DIR = Path(ENV_DATA_FOLDER).resolve()
