@@ -119,3 +119,50 @@ def test_folder_upload_respects_env_data_folder(monkeypatch, tmp_path: Path):
             original["RESULT_DIR"], original["RESULT_BASE_DIR"], original["DEFAULT_DATASET_NAME"]
         )
         webapp.SUMMARY_FILE = original["SUMMARY_FILE"]
+
+
+def test_root_performancelog_upload_no_double_nesting(tmp_path: Path):
+    data_base = tmp_path / "data"
+    result_base = tmp_path / "result"
+    data_base.mkdir(parents=True, exist_ok=True)
+    result_base.mkdir(parents=True, exist_ok=True)
+
+    original = {
+        "DATA_BASE_DIR": webapp.DATA_BASE_DIR,
+        "RESULT_DIR": webapp.RESULT_DIR,
+        "RESULT_BASE_DIR": webapp.RESULT_BASE_DIR,
+        "SUMMARY_FILE": webapp.SUMMARY_FILE,
+        "DEFAULT_DATASET_NAME": webapp.DEFAULT_DATASET_NAME,
+    }
+    webapp.DATA_BASE_DIR = data_base
+    webapp.configure_result_dirs(result_base, result_base, None)
+
+    dataset_name = "2.0.1.0"
+    log_content = b"12:00:00.000 ServiceC - loading_time: 33 ms\n"
+
+    try:
+        with webapp.app.test_client() as client:
+            resp = client.post(
+                "/api/datasets/import",
+                data={
+                    "datasetName": dataset_name,
+                    "folder": (BytesIO(log_content), f"{dataset_name}/PerformanceLog/logC.log"),
+                },
+                content_type="multipart/form-data",
+            )
+            assert resp.status_code == 201
+
+            analytics = client.get(
+                "/api/dashboard",
+                query_string={"dataset": data_base.name, "view": "analytics"},
+            )
+            assert analytics.status_code == 200
+
+        # Data should be directly under data/<version>/PerformanceLog without extra nesting
+        assert (data_base / dataset_name / "PerformanceLog" / "logC.log").exists()
+    finally:
+        webapp.DATA_BASE_DIR = original["DATA_BASE_DIR"]
+        webapp.configure_result_dirs(
+            original["RESULT_DIR"], original["RESULT_BASE_DIR"], original["DEFAULT_DATASET_NAME"]
+        )
+        webapp.SUMMARY_FILE = original["SUMMARY_FILE"]

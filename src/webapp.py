@@ -515,13 +515,11 @@ def _validate_import_candidate(dataset_root: Path) -> None:
             version_dir.relative_to(dataset_root)
         except ValueError:
             continue
-        if version_dir == dataset_root:
-            continue
         version_dirs[version_dir.as_posix()] = version_dir
 
     if len(version_dirs) < 1:
         raise ValueError(
-            "Dataset must contain at least one version folder with a PerformanceLog directory."
+            "Dataset must contain at least one version (root or subfolder) with a PerformanceLog directory."
         )
     # Verify each version has at least one .log
     missing_logs = [
@@ -534,26 +532,7 @@ def _validate_import_candidate(dataset_root: Path) -> None:
 
 
 def _normalize_dataset_root(dataset_root: Path) -> Path:
-    """If the dataset root itself contains PerformanceLog, wrap it into a version folder."""
-    direct_plog = dataset_root / "PerformanceLog"
-    if direct_plog.is_dir():
-        version_name = dataset_root.name
-        version_dir = dataset_root / version_name
-        version_dir.mkdir(parents=True, exist_ok=True)
-        # Move all contents except the new version_dir into it
-        for child in list(dataset_root.iterdir()):
-            if child == version_dir:
-                continue
-            shutil.move(str(child), version_dir / child.name)
-        UPLOAD_LOGGER.info(
-            json.dumps(
-                {
-                    "status": "normalize",
-                    "dataset": dataset_root.name,
-                    "reason": "Wrapped root PerformanceLog into version folder",
-                }
-            )
-        )
+    """No-op normalization; keep root structure intact."""
     return dataset_root
 
 
@@ -568,8 +547,6 @@ def _collect_version_dirs(dataset_root: Path) -> List[Path]:
         try:
             version_dir.relative_to(dataset_root)
         except ValueError:
-            continue
-        if version_dir == dataset_root:
             continue
         versions.append(version_dir)
     return versions
@@ -748,12 +725,16 @@ def import_dataset() -> Tuple[Response, int]:
             abort(400, str(exc))
 
         extracted_versions = _collect_version_dirs(extracted_root)
+        single_root_version = len(extracted_versions) == 1 and extracted_versions[0] == extracted_root
+        root_version_name = dataset_name if single_root_version else None
 
         # Prefer merging into existing "data" dataset or the sole existing dataset when names differ
         existing = _available_datasets()
         user_provided_name = bool(provided_name)
         target_dataset = dataset_name
-        if not user_provided_name and target_dataset not in existing and extracted_versions:
+        if single_root_version:
+            target_dataset = DATA_BASE_DIR.name
+        elif not user_provided_name and target_dataset not in existing and extracted_versions:
             if "data" in existing:
                 target_dataset = "data"
             elif len(existing) == 1:
@@ -770,7 +751,8 @@ def import_dataset() -> Tuple[Response, int]:
             if data_root.exists():
                 new_versions = []
                 for vdir in extracted_versions:
-                    target = data_root / vdir.name
+                    version_name = root_version_name or vdir.name
+                    target = data_root / version_name
                     if target.exists():
                         continue
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -784,11 +766,18 @@ def import_dataset() -> Tuple[Response, int]:
             data_root.parent.mkdir(parents=True, exist_ok=True)
             RESULT_BASE_DIR.mkdir(parents=True, exist_ok=True)
             moved = False
-            for child in extracted_root.iterdir():
-                shutil.move(str(child), data_root / child.name)
-                moved = True
-            if not moved:
-                shutil.move(str(extracted_root), data_root)
+            if single_root_version:
+                dest_dir = data_root / (root_version_name or extracted_root.name)
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                for child in extracted_root.iterdir():
+                    shutil.move(str(child), dest_dir / child.name)
+                    moved = True
+            else:
+                for child in extracted_root.iterdir():
+                    shutil.move(str(child), data_root / child.name)
+                    moved = True
+                if not moved:
+                    shutil.move(str(extracted_root), data_root)
 
     if data_root is None or result_root is None:
         abort(500, "Failed to process uploaded dataset.")
