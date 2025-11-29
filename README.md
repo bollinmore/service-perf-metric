@@ -35,6 +35,22 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - Clean out generated artifacts anytime:
   - `python spm.py clean`
 
+## Docker
+
+- Build the image: `docker build -t spm-app:latest .`
+- Run with the same defaults the app expects (port 6231, named volume for data):
+  ```
+  docker run --rm -it \
+    -p 6231:6231 \
+    -v spm-data:/app/data \
+    -v "$PWD/result:/app/result" \
+    -v "$PWD/recycle:/app/recycle" \
+    --name spm spm-app:latest
+  ```
+- Use a host data folder instead of the named volume: replace the data mount with `-v "$PWD/data:/app/data"` (or `SPM_DATA_VOLUME=$PWD/data docker compose up --build`).
+- Compose: `docker compose up --build` (defaults to `6231:6231` and `spm-data:/app/data`; override data mount via `SPM_DATA_VOLUME`).
+- Relevant env vars: `SPM_DEFAULT_DATASET`, `SPM_RESULT_BASE`, `SPM_RESULT_ROOT`, `SPM_DATA_FOLDER` for custom data roots.
+
 ## Project Layout
 
 - `data/` default root for raw logs (overridable via CLI `--data`; other folders like `data1/`, `data2/` can be merged)
