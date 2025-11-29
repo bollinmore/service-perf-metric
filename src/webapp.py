@@ -42,7 +42,10 @@ from src.services.comparison import run_comparison, get_latest_comparison
 _BACKEND_API_CACHE: Dict[str, object] = {"mtime": None, "html": ""}
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if DEFAULT_DATA_DIR.is_absolute():
+ENV_DATA_FOLDER = os.environ.get("SPM_DATA_FOLDER")
+if ENV_DATA_FOLDER:
+    DATA_BASE_DIR = Path(ENV_DATA_FOLDER).resolve()
+elif DEFAULT_DATA_DIR.is_absolute():
     DATA_BASE_DIR = DEFAULT_DATA_DIR
 else:
     DATA_BASE_DIR = (PROJECT_ROOT / DEFAULT_DATA_DIR).resolve()
@@ -182,11 +185,14 @@ SUMMARY_FILE = RESULT_DIR / "summary.csv"
 
 def configure_result_dirs(result_dir: Path, base_dir: Path, dataset_name: str | None) -> None:
     """Update the module-level paths when the CLI provides overrides."""
-    global RESULT_DIR, RESULT_BASE_DIR, SUMMARY_FILE, DEFAULT_DATASET_NAME
+    global RESULT_DIR, RESULT_BASE_DIR, SUMMARY_FILE, DEFAULT_DATASET_NAME, DATA_BASE_DIR
     RESULT_DIR = result_dir
     RESULT_BASE_DIR = base_dir
     SUMMARY_FILE = RESULT_DIR / "summary.csv"
     DEFAULT_DATASET_NAME = dataset_name
+    env_data = os.environ.get("SPM_DATA_FOLDER")
+    if env_data:
+        DATA_BASE_DIR = Path(env_data).resolve()
 
 
 def _list_csv_files() -> List[Path]:
@@ -745,8 +751,9 @@ def import_dataset() -> Tuple[Response, int]:
 
         # Prefer merging into existing "data" dataset or the sole existing dataset when names differ
         existing = _available_datasets()
+        user_provided_name = bool(provided_name)
         target_dataset = dataset_name
-        if target_dataset not in existing and extracted_versions:
+        if not user_provided_name and target_dataset not in existing and extracted_versions:
             if "data" in existing:
                 target_dataset = "data"
             elif len(existing) == 1:
@@ -859,6 +866,12 @@ def api_dashboard():
     return jsonify(state)
 
 
+@app.get("/favicon.ico")
+def favicon():
+    """Prevent browser favicon requests from erroring out when not provided."""
+    return ("", 204)
+
+
 def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
     """
     Load summary data for a dataset.
@@ -866,12 +879,19 @@ def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
     Priority:
     1) summary.csv at dataset root (generated summaries)
     2) temp/latest/summary.csv (must have 'service' and version columns)
+    3) First available version summary under result_dir/*/summary.csv (renamed to version column)
     """
     candidates = [
         result_dir / "summary.csv",
         result_dir / "temp" / "latest" / "summary.csv",
     ]
     summary_path = next((p for p in candidates if p.exists()), None)
+    fallback_version: str | None = None
+    if summary_path is None:
+        version_summaries = sorted(result_dir.glob("*/summary.csv"))
+        if version_summaries:
+            summary_path = version_summaries[0]
+            fallback_version = summary_path.parent.name
     if not summary_path:
         raise FileNotFoundError(
             "No summary found. Generate summaries or run a comparison to populate temp/latest/summary.csv"
@@ -885,6 +905,10 @@ def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
     df = df[~df["service"].isin(EXCLUDED_SERVICES)]
 
     numeric_cols = [c for c in df.columns if c != "service"]
+    if fallback_version and numeric_cols:
+        # Rename the first numeric column to the discovered version folder name
+        df = df.rename(columns={numeric_cols[0]: fallback_version})
+        numeric_cols = [fallback_version]
     if not numeric_cols:
         raise ValueError(f"summary.csv at {summary_path} must contain at least one version column")
 
@@ -948,6 +972,28 @@ def _load_service_stats(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
     stats_df.index = stats_df.index.astype(str)
     stats_df = stats_df[~stats_df.index.isin(EXCLUDED_SERVICES)]
     return stats_df, versions
+
+
+def _compute_stats_from_summary(df: pd.DataFrame, version_cols: List[str]) -> Tuple[pd.DataFrame, List[str]]:
+    """Derive basic stats from summary when service_stats.csv is missing."""
+    if df.empty or not version_cols:
+        return pd.DataFrame(columns=["service"]).set_index("service"), []
+
+    stats_rows: List[Dict[str, object]] = []
+    for service_name, group in df.groupby("service"):
+        if service_name in EXCLUDED_SERVICES:
+            continue
+        row: Dict[str, object] = {"service": service_name}
+        for version in version_cols:
+            col = pd.to_numeric(group[version], errors="coerce")
+            row[f"{version}_min"] = float(col.min(skipna=True)) if not col.empty else None
+            row[f"{version}_median"] = float(col.median(skipna=True)) if not col.empty else None
+            row[f"{version}_avg"] = float(col.mean(skipna=True)) if not col.empty else None
+            row[f"{version}_max"] = float(col.max(skipna=True)) if not col.empty else None
+        stats_rows.append(row)
+
+    stats_df = pd.DataFrame(stats_rows).set_index("service")
+    return stats_df, version_cols
 
 
 def _build_bar_figure_from_wide(wide: pd.DataFrame, version_cols: List[str]) -> go.Figure:
@@ -1230,26 +1276,39 @@ def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
     Load summary data for a dataset.
 
     Priority:
-    1) temp/latest/summary.csv (latest comparison)
-    2) summary.csv at dataset root (generated summaries)
+    1) summary.csv at dataset root (generated summaries)
+    2) temp/latest/summary.csv (must have 'service' and version columns)
+    3) First available version summary under result_dir/*/summary.csv (renamed to version column)
     """
-    temp_latest = result_dir / "temp" / "latest" / "summary.csv"
-    summary_path = temp_latest if temp_latest.exists() else result_dir / "summary.csv"
-    if not summary_path.exists():
+    candidates = [
+        result_dir / "summary.csv",
+        result_dir / "temp" / "latest" / "summary.csv",
+    ]
+    summary_path = next((p for p in candidates if p.exists()), None)
+    fallback_version: str | None = None
+    if summary_path is None:
+        version_summaries = sorted(result_dir.glob("*/summary.csv"))
+        if version_summaries:
+            summary_path = version_summaries[0]
+            fallback_version = summary_path.parent.name
+    if not summary_path:
         raise FileNotFoundError(
             "No summary found. Generate summaries or run a comparison to populate temp/latest/summary.csv"
         )
 
     df = pd.read_csv(summary_path)
     if "service" not in df.columns:
-        raise ValueError("summary.csv must contain a 'service' column")
+        raise ValueError(f"summary.csv at {summary_path} must contain a 'service' column")
 
     df["service"] = df["service"].astype(str)
     df = df[~df["service"].isin(EXCLUDED_SERVICES)]
 
-    numeric_cols = sort_versions([c for c in df.columns if c != "service"])
+    numeric_cols = [c for c in df.columns if c != "service"]
+    if fallback_version and numeric_cols:
+        df = df.rename(columns={numeric_cols[0]: fallback_version})
+        numeric_cols = [fallback_version]
     if not numeric_cols:
-        raise ValueError("summary.csv must contain at least one version column")
+        raise ValueError(f"summary.csv at {summary_path} must contain at least one version column")
 
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
     return df, numeric_cols
@@ -1491,18 +1550,31 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
         else (report_files[0] if report_files else "")
     )
 
+    allow_empty = os.environ.get("SPM_ALLOW_EMPTY_DATASET") == "1"
+
     try:
         df, version_cols, melted, service_order = _prepare_summary(active_result_dir)
         version_cols = list(version_cols)
         service_order = list(service_order)
     except (FileNotFoundError, ValueError) as exc:
-        abort(404, str(exc))
+        if not allow_empty:
+            raise
+        dataset_error = str(exc)
+        df = pd.DataFrame(columns=["service"])
+        version_cols = []
+        melted = pd.DataFrame(columns=["service", "version", "loading_time"])
+        service_order = []
 
     try:
         stats_df, stats_versions = _load_service_stats(active_result_dir)
         stats_versions = list(stats_versions)
     except FileNotFoundError as exc:
-        abort(404, str(exc))
+        # Fallback: derive stats from summary when service_stats.csv is absent
+        stats_df, stats_versions = _compute_stats_from_summary(df, version_cols)
+        if stats_df.empty and not allow_empty:
+            raise
+        if not dataset_error:
+            dataset_error = str(exc)
 
     available_box_versions = [v for v in version_cols if v in stats_versions] if stats_versions else version_cols
     dropdown_versions = available_box_versions if available_box_versions else version_cols

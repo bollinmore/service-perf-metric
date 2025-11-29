@@ -273,11 +273,12 @@ def merge_data_folders(
     )
 
 
-def serve_webapp(host: str, port: int, debug: bool, result_root: Path, base_result_dir: Path) -> None:
+def serve_webapp(host: str, port: int, debug: bool, data_root: Path, result_root: Path, base_result_dir: Path) -> None:
     """Start the Flask web application."""
     mode_status = MODE_SERVICE.current_status()
     os.environ["SPM_MODE"] = mode_status.mode
     os.environ["SPM_MODE_SOURCE"] = mode_status.source
+    os.environ["SPM_DATA_FOLDER"] = str(data_root)
     if mode_status.warnings:
         for note in mode_status.warnings:
             print(f"[mode] Warning: {note}")
@@ -295,6 +296,7 @@ def serve_webapp(host: str, port: int, debug: bool, result_root: Path, base_resu
         os.environ["SPM_DEFAULT_DATASET"] = dataset_name
     else:
         os.environ.pop("SPM_DEFAULT_DATASET", None)
+    os.environ["SPM_DATA_FOLDER"] = str(data_root)
     from src import webapp
 
     configure = getattr(webapp, "configure_result_dirs", None)
@@ -530,7 +532,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             except ValidationError as exc:
                 LOGGER.error(f"[serve] comparison generation failed: {exc}")
 
-    serve_webapp(args.host, args.port, args.debug, result_root, DEFAULT_RESULT_DIR)
+    serve_webapp(args.host, args.port, args.debug, data_root, result_root, DEFAULT_RESULT_DIR)
 
 
 def cmd_merge(args: argparse.Namespace) -> None:
