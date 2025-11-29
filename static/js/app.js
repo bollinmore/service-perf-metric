@@ -592,6 +592,8 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
           }
           await resp.json();
         }
+        // Reload dashboard data so charts/compare views reflect the freshly generated comparison outputs.
+        await loadState({ view, dataset });
         setActiveSelection(workingSelection);
         setState((prev) => ({
           ...prev,
@@ -625,7 +627,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       } finally {
         setApplyLoading(false);
       }
-    }, [workingSelection, dataFolder, comparisonsEndpoint, fetchLatestComparison]);
+    }, [workingSelection, dataFolder, comparisonsEndpoint, fetchLatestComparison, loadState, view, dataset]);
 
     const handleDatasetImport = useCallback(
       async (event) => {

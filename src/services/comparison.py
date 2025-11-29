@@ -36,12 +36,19 @@ def _write_combined_outputs(run_paths: dict, versions: list[str], data_folder: P
     summary_path = run_paths["summary"]
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
-    combined = pd.DataFrame()
+    service_columns: list[pd.Series] = []
+    value_columns: list[pd.Series] = []
     for ver in versions:
         series = _load_version_series(data_folder / ver)
-        combined[ver] = series
-    combined.insert(0, "service", combined.index)
-    combined.index = pd.RangeIndex(len(combined))  # avoid index/column ambiguity
+        # Drop the service index to avoid duplicate-label reindexing errors when combining columns
+        service_columns.append(pd.Series(series.index, name=f"{ver}_service").reset_index(drop=True))
+        value_columns.append(series.reset_index(drop=True).rename(ver))
+
+    # Combine values column-wise, letting pandas extend the frame for differing lengths
+    combined = pd.concat(value_columns, axis=1)
+    # Pick the first non-null service label per row from any version
+    combined.insert(0, "service", pd.concat(service_columns, axis=1).bfill(axis=1).ffill(axis=1).iloc[:, 0])
+    combined.index = pd.RangeIndex(len(combined))  # avoid index/column ambiguity for downstream ops
     combined.to_csv(summary_path, index=False)
 
     # Build per-service stats required by box plots: version_min/median/avg/max per service
