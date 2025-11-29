@@ -1575,14 +1575,22 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       <div className="flex h-full flex-1 flex-col overflow-hidden">
         <header className="sticky top-0 z-30 flex-shrink-0 border-b border-gray-200 bg-white bg-opacity-95 backdrop-blur">
           <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-6 py-4">
-            <div>
-              <h1 className="text-xl font-semibold text-gray-900">
-                Service Performance Metric
-              </h1>
-              <p className="text-sm text-gray-500">
-                View: ${VIEWS.find((item) => item.id === view)?.label || "Analytics"}
-              </p>
-            </div>
+          <button
+            type="button"
+            className="text-left"
+            onClick=${() => {
+              // Always return to the app home (root) to reset view/query params.
+              window.location.assign("/");
+            }}
+            aria-label="Go to home"
+          >
+            <h1 className="text-xl font-semibold text-gray-900">
+              Service Performance Metric
+            </h1>
+            <p className="text-sm text-gray-500">
+              View: ${VIEWS.find((item) => item.id === view)?.label || "Analytics"}
+            </p>
+          </button>
             <div className="flex items-center gap-3">
               ${activeSelection.length
                 ? html`<div className="flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
