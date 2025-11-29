@@ -14,6 +14,7 @@ from typing import Dict, List, Tuple
 import zipfile
 
 import pandas as pd
+from src.lib.version_sort import sort_versions
 import plotly.graph_objects as go
 from flask import (
     Flask,
@@ -942,7 +943,7 @@ def _load_service_stats(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
         if metric in {"avg", "min", "max", "median"}:
             version_set.add(version)
 
-    versions = sorted(version_set)
+    versions = sort_versions(version_set)
     stats_df = stats_df.set_index("service")
     stats_df.index = stats_df.index.astype(str)
     stats_df = stats_df[~stats_df.index.isin(EXCLUDED_SERVICES)]
@@ -1246,7 +1247,7 @@ def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
     df["service"] = df["service"].astype(str)
     df = df[~df["service"].isin(EXCLUDED_SERVICES)]
 
-    numeric_cols = [c for c in df.columns if c != "service"]
+    numeric_cols = sort_versions([c for c in df.columns if c != "service"])
     if not numeric_cols:
         raise ValueError("summary.csv must contain at least one version column")
 

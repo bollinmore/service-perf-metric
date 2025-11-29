@@ -11,6 +11,7 @@ from src.config.paths import latest_pointer, temp_root_for_data_folder
 from src.lib.logging_config import get_comparison_logger
 from src.lib.path_utils import ValidationError
 from src.lib.run_ids import generate_run_id
+from src.lib.version_sort import sort_versions
 from src.services.temp_storage import init_run_dirs, promote_latest, prune_previous_runs
 from src.services.validation import require_one_to_three
 from src.services.version_pool import list_versions, require_versions_available
@@ -38,7 +39,8 @@ def _write_combined_outputs(run_paths: dict, versions: list[str], data_folder: P
 
     service_columns: list[pd.Series] = []
     value_columns: list[pd.Series] = []
-    for ver in versions:
+    ordered_versions = sort_versions(versions)
+    for ver in ordered_versions:
         series = _load_version_series(data_folder / ver)
         # Drop the service index to avoid duplicate-label reindexing errors when combining columns
         service_columns.append(pd.Series(series.index, name=f"{ver}_service").reset_index(drop=True))
@@ -55,7 +57,7 @@ def _write_combined_outputs(run_paths: dict, versions: list[str], data_folder: P
     stats_rows = []
     for service_name, group in combined.groupby("service"):
         stats_entry = {"service": service_name}
-        for ver in versions:
+        for ver in ordered_versions:
             col = pd.to_numeric(group[ver], errors="coerce")
             stats_entry[f"{ver}_min"] = float(col.min(skipna=True)) if not col.empty else None
             stats_entry[f"{ver}_median"] = float(col.median(skipna=True)) if not col.empty else None
