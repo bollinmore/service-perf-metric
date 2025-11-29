@@ -25,5 +25,12 @@
 - Confirm updates the comparison to exactly the selected versions; cancel/close leaves state unchanged.
 - Empty-state shows message and Confirm disabled when no versions are returned.
 - Error vs. empty data behavior follows documented UX decision; previous selections remain if fetch fails.
+- Reopen shows prior selections preselected; unavailable selections are flagged and must be removed before confirming.
 - Accessibility: focus trap active in modal; gear and controls have aria labels; keyboard navigation works through list items.
 - Performance: version list refresh/apply feels responsive (within ~2s), and limit feedback appears within ~1s.
+- Validation steps (per success criteria):
+  - SC-001: Verify gear is visible top-right and Dataset dropdown is removed on Analytics.
+  - SC-002: Open modal and complete a 1–3 selection without assistance.
+  - SC-003: With three selected, attempt a fourth; feedback appears within ~1s and selections stay unchanged.
+  - SC-004: Confirm updates comparison to exactly the selected versions within ~2s.
+  - SC-005: Compare modal list against datasets/versions under data folder; all available are listed with dataset context.

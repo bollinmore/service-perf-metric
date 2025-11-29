@@ -14,10 +14,13 @@ bp = Blueprint("versions", __name__, url_prefix="/versions")
 def _status_to_dict(status: VersionStatus) -> Dict[str, Any]:
     return {
         "version_id": status.version_id,
+        "dataset": status.dataset,
+        "version": status.version,
         "status": status.status,
         "summary_path": str(status.summary_path),
         "message": status.message,
         "path": str(status.path),
+        "selectable": status.status == "available",
     }
 
 

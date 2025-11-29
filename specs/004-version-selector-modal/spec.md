@@ -117,3 +117,9 @@ Analyst reopens the modal to review current selections and swap versions without
 - **SC-003**: In test runs where three versions are already selected, attempts to select a fourth are blocked with visible feedback within 1 second in 100% of cases.
 - **SC-004**: After confirming selections, the comparison view reflects the chosen versions within 2 seconds and lists exactly the versions selected in 100% of validation runs.
 - **SC-005**: All versions present in the data folder at modal open time are displayed in the modal list with no omissions in validation against sample datasets.
+
+## Traceability
+
+- User Story 1 → FR-001–FR-011, SC-001–SC-005 → Tasks T006–T013, T027
+- User Story 2 → FR-005–FR-006, SC-003 → Tasks T014–T016, T028
+- User Story 3 → FR-007–FR-011, SC-002, SC-005 → Tasks T017–T020, T025–T026

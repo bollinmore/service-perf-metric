@@ -37,6 +37,7 @@ try:
     from src.lib.path_utils import ValidationError, parse_versions_arg, validate_base_path
     from src.lib.logging import get_logger, log_selection, log_upload_rejection
     from src.services.comparison_service import plan_comparison, refresh_results
+    from src.services.comparison import run_comparison
     from src.services.mode_service import get_mode_service
     from src.services.selection_service import validate_selection
     from src.services.version_discovery import discover_versions
@@ -502,20 +503,40 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 def cmd_serve(args: argparse.Namespace) -> None:
     data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
-    versions = parse_versions_arg(args.versions)
-    if not versions:
-        discovered = discover_versions(data_root)
-        all_names = [v.name for v in discovered]
-        versions = all_names[-3:] if len(all_names) > 3 else all_names
-    plan = plan_comparison(data_root, versions or None, result_root_for_data(data_root))
-    if plan.conflicts and not getattr(args, "allow_conflicts", False):
-        raise ValidationError("; ".join(plan.conflicts))
-    log_selection(LOGGER, str(data_root), plan.selected_versions)
+    discovered = discover_versions(data_root)
+    all_versions = sorted(v.name for v in discovered)
+    if not all_versions:
+        raise ValidationError(f"No versions found under {data_root}")
+
+    result_root = result_root_for_data(data_root)
+    compare_selection: List[str] = []
+    if len(all_versions) >= 2:
+        compare_selection = all_versions[-3:] if len(all_versions) > 3 else all_versions
+
     if not args.no_build:
-        if getattr(args, "refresh", False):
-            refresh_results(plan, force_refresh=True)
-        generate_reports(plan.base_path, plan.result_root, allowed_versions=plan.selected_versions)
-    serve_webapp(args.host, args.port, args.debug, plan.result_root, DEFAULT_RESULT_DIR)
+        def _summaries_exist(root: Path, versions: List[str]) -> bool:
+            return all((root / ver / "summary.csv").exists() for ver in versions)
+
+        if getattr(args, "refresh", False) or not _summaries_exist(result_root, all_versions):
+            generate_reports(data_root, result_root, allowed_versions=all_versions)
+
+        def _latest_matches(root: Path, selection: List[str]) -> bool:
+            manifest = root / "temp" / "latest" / "manifest.json"
+            if not manifest.exists():
+                return False
+            try:
+                payload = json.loads(manifest.read_text())
+                return payload.get("selected_versions") == selection
+            except Exception:
+                return False
+
+        if len(compare_selection) >= 2 and not _latest_matches(result_root, compare_selection):
+            try:
+                run_comparison(result_root, compare_selection)
+            except ValidationError as exc:
+                LOGGER.error(f"[serve] comparison generation failed: {exc}")
+
+    serve_webapp(args.host, args.port, args.debug, result_root, DEFAULT_RESULT_DIR)
 
 
 def cmd_merge(args: argparse.Namespace) -> None:

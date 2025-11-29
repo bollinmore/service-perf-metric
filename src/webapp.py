@@ -32,6 +32,9 @@ from werkzeug.utils import secure_filename
 
 from spm import DEFAULT_DATA_DIR, generate_reports
 from src.services.mode_service import get_mode_service
+from src.services.validation import ValidationError, require_one_to_three
+from src.services.version_pool import list_versions, require_versions_available
+from src.services.comparison import run_comparison, get_latest_comparison
 
 
 # Cached HTML for backend API docs
@@ -76,6 +79,69 @@ EXCLUDED_SERVICES = {
 
 def _mode_service():
     return get_mode_service(PROJECT_ROOT)
+
+
+@app.get("/versions")
+def api_versions():
+    data_folder = request.args.get("data_folder")
+    if not data_folder:
+        return jsonify({"error": "data_folder is required"}), 400
+    try:
+        statuses = list_versions(Path(data_folder))
+    except ValidationError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+    def _status_to_dict(status) -> dict:
+        return {
+            "version_id": status.version_id,
+            "dataset": status.dataset,
+            "version": status.version,
+            "status": status.status,
+            "summary_path": str(status.summary_path),
+            "message": status.message,
+            "path": str(status.path),
+            "selectable": status.status == "available",
+        }
+
+    return jsonify(
+        {
+            "data_folder": data_folder,
+            "versions": [_status_to_dict(status) for status in statuses],
+        }
+    )
+
+
+@app.post("/comparisons")
+def api_comparisons():
+    payload: Dict[str, object] = request.get_json(silent=True) or {}
+    data_folder = payload.get("data_folder")
+    versions = payload.get("versions") or []
+    if not data_folder:
+        return jsonify({"error": "data_folder is required"}), 400
+    try:
+        selection = require_one_to_three(versions)
+    except ValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    try:
+        result = run_comparison(Path(data_folder), selection)
+    except ValidationError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(result), 201
+
+
+@app.get("/comparisons/latest")
+def api_comparisons_latest():
+    data_folder = request.args.get("data_folder")
+    if not data_folder:
+        return jsonify({"error": "data_folder is required"}), 400
+    try:
+        latest = get_latest_comparison(Path(data_folder))
+    except ValidationError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+    return jsonify(latest)
 
 
 def _resolve_result_dir() -> Path:
@@ -139,7 +205,7 @@ def _available_datasets() -> List[str]:
         return []
     datasets: List[str] = []
     for entry in sorted(RESULT_BASE_DIR.iterdir()):
-        if entry.is_dir() and (entry / "summary.csv").exists():
+        if entry.is_dir():
             datasets.append(entry.name)
     return datasets
 
@@ -756,6 +822,7 @@ def index() -> str:
         "views": ["analytics", "reports", "compare", "api"],
         "selectedDataset": active_dataset or "",
         "datasetOptions": dataset_options,
+        "dataFolder": str(RESULT_DIR),
         "apiDocsHtml": _load_backend_api_html(),
         "endpoints": {
             "csv": url_for("api_csv"),
@@ -764,6 +831,9 @@ def index() -> str:
             "analyticsBar": url_for("analytics_bardata"),
             "importDataset": url_for("import_dataset"),
             "deleteDataset": url_for("delete_dataset"),
+            "versions": url_for("api_versions"),
+            "comparisons": url_for("api_comparisons"),
+            "comparisonsLatest": url_for("api_comparisons_latest"),
             "modeStatus": url_for("get_mode_status"),
             "modeReadiness": url_for("get_readiness"),
         },
@@ -789,20 +859,33 @@ def api_dashboard():
 
 
 def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
-    summary_path = result_dir / "summary.csv"
-    if not summary_path.exists():
-        raise FileNotFoundError("summary.csv not found. Generate it with extract.py --combine")
+    """
+    Load summary data for a dataset.
+
+    Priority:
+    1) summary.csv at dataset root (generated summaries)
+    2) temp/latest/summary.csv (must have 'service' and version columns)
+    """
+    candidates = [
+        result_dir / "summary.csv",
+        result_dir / "temp" / "latest" / "summary.csv",
+    ]
+    summary_path = next((p for p in candidates if p.exists()), None)
+    if not summary_path:
+        raise FileNotFoundError(
+            "No summary found. Generate summaries or run a comparison to populate temp/latest/summary.csv"
+        )
 
     df = pd.read_csv(summary_path)
     if "service" not in df.columns:
-        raise ValueError("summary.csv must contain a 'service' column")
+        raise ValueError(f"summary.csv at {summary_path} must contain a 'service' column")
 
     df["service"] = df["service"].astype(str)
     df = df[~df["service"].isin(EXCLUDED_SERVICES)]
 
     numeric_cols = [c for c in df.columns if c != "service"]
     if not numeric_cols:
-        raise ValueError("summary.csv must contain at least one version column")
+        raise ValueError(f"summary.csv at {summary_path} must contain at least one version column")
 
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
     return df, numeric_cols
@@ -832,9 +915,20 @@ def _prepare_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str], pd.Data
 
 
 def _load_service_stats(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
-    stats_path = result_dir / "service_stats.csv"
-    if not stats_path.exists():
-        raise FileNotFoundError("service_stats.csv not found. Generate it with report.py")
+    """
+    Load service stats for a dataset.
+
+    Priority:
+    1) service_stats.csv at dataset root
+    2) temp/latest/service_stats.csv
+    """
+    candidates = [
+        result_dir / "service_stats.csv",
+        result_dir / "temp" / "latest" / "service_stats.csv",
+    ]
+    stats_path = next((p for p in candidates if p.exists()), None)
+    if not stats_path:
+        raise FileNotFoundError("service_stats.csv not found in dataset root or temp/latest/")
 
     stats_df = pd.read_csv(stats_path)
     if "service" not in stats_df.columns:
@@ -1131,9 +1225,19 @@ def api_csv():
 
 
 def _load_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
-    summary_path = result_dir / "summary.csv"
+    """
+    Load summary data for a dataset.
+
+    Priority:
+    1) temp/latest/summary.csv (latest comparison)
+    2) summary.csv at dataset root (generated summaries)
+    """
+    temp_latest = result_dir / "temp" / "latest" / "summary.csv"
+    summary_path = temp_latest if temp_latest.exists() else result_dir / "summary.csv"
     if not summary_path.exists():
-        raise FileNotFoundError("summary.csv not found. Generate it with extract.py --combine")
+        raise FileNotFoundError(
+            "No summary found. Generate summaries or run a comparison to populate temp/latest/summary.csv"
+        )
 
     df = pd.read_csv(summary_path)
     if "service" not in df.columns:
@@ -1174,9 +1278,12 @@ def _prepare_summary(result_dir: Path) -> Tuple[pd.DataFrame, List[str], pd.Data
 
 
 def _load_service_stats(result_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
-    stats_path = result_dir / "service_stats.csv"
+    temp_latest = result_dir / "temp" / "latest" / "service_stats.csv"
+    stats_path = temp_latest if temp_latest.exists() else result_dir / "service_stats.csv"
     if not stats_path.exists():
-        raise FileNotFoundError("service_stats.csv not found. Generate it with report.py")
+        # Gracefully degrade if service stats are missing; return empty structures.
+        empty = pd.DataFrame(columns=["service"])
+        return empty.set_index("service"), []
 
     stats_df = pd.read_csv(stats_path)
     if "service" not in stats_df.columns:
@@ -1358,6 +1465,7 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
     if not active_dataset and dataset_options:
         active_dataset = dataset_options[0]
 
+    dataset_error = ""
     active_result_dir = _result_dir_for_dataset(active_dataset)
 
     if active_dataset and active_dataset not in dataset_options:
@@ -1382,13 +1490,25 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
         else (report_files[0] if report_files else "")
     )
 
-    df, version_cols, melted, service_order = _prepare_summary(active_result_dir)
-    stats_df, stats_versions = _load_service_stats(active_result_dir)
+    try:
+        df, version_cols, melted, service_order = _prepare_summary(active_result_dir)
+        version_cols = list(version_cols)
+        service_order = list(service_order)
+    except (FileNotFoundError, ValueError) as exc:
+        abort(404, str(exc))
 
-    available_box_versions = [v for v in version_cols if v in stats_versions]
+    try:
+        stats_df, stats_versions = _load_service_stats(active_result_dir)
+        stats_versions = list(stats_versions)
+    except FileNotFoundError as exc:
+        abort(404, str(exc))
+
+    available_box_versions = [v for v in version_cols if v in stats_versions] if stats_versions else version_cols
     dropdown_versions = available_box_versions if available_box_versions else version_cols
 
-    dataset_warnings, dataset_error = _validate_dataset_requirements(melted)
+    dataset_warnings, validation_error = _validate_dataset_requirements(melted)
+    if validation_error and not dataset_error:
+        dataset_error = validation_error
     bar_alerts: List[str] = list(dataset_warnings)
     if dataset_error:
         bar_alerts.append(dataset_error)
@@ -1408,26 +1528,28 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
         selected_version = dropdown_versions[0] if dropdown_versions else ""
 
     metrics = ["Average", "Max", "Min", "Median"]
-    version_stats_df = pd.DataFrame(
-        {
-            "Average": df[version_cols].mean(skipna=True),
-            "Max": df[version_cols].max(skipna=True),
-            "Min": df[version_cols].min(skipna=True),
-            "Median": df[version_cols].median(skipna=True),
-        }
-    )
-    version_stats_df = version_stats_df[metrics].round(2)
-
     version_stats_rows: List[Dict[str, object]] = []
-    for metric in metrics:
-        metric_values: Dict[str, float | None] = {}
-        for version in version_cols:
-            if version in version_stats_df.index:
-                value = version_stats_df.at[version, metric]
-                metric_values[version] = float(value) if pd.notna(value) else None
-            else:
-                metric_values[version] = None
-        version_stats_rows.append({"metric": metric, "values": metric_values})
+    version_stats_df = pd.DataFrame()
+    if version_cols:
+        version_stats_df = pd.DataFrame(
+            {
+                "Average": df[version_cols].mean(skipna=True),
+                "Max": df[version_cols].max(skipna=True),
+                "Min": df[version_cols].min(skipna=True),
+                "Median": df[version_cols].median(skipna=True),
+            }
+        )
+        version_stats_df = version_stats_df[metrics].round(2)
+
+        for metric in metrics:
+            metric_values: Dict[str, float | None] = {}
+            for version in version_cols:
+                if version in version_stats_df.index:
+                    value = version_stats_df.at[version, metric]
+                    metric_values[version] = float(value) if pd.notna(value) else None
+                else:
+                    metric_values[version] = None
+            version_stats_rows.append({"metric": metric, "values": metric_values})
 
     box_figures: Dict[str, Dict[str, object]] = {}
     for ver in dropdown_versions:
@@ -1513,6 +1635,7 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
         "views": ["analytics", "reports", "compare", "api"],
         "datasetOptions": dataset_options,
         "selectedDataset": selected_dataset,
+        "dataFolder": str(RESULT_DIR),
         "datasetWarnings": dataset_warnings,
         "datasetError": dataset_error,
         "barAlerts": bar_alerts,
@@ -1550,6 +1673,9 @@ def _build_dashboard_state(active_view: str, query_params: Dict[str, str]) -> Di
             "analyticsBar": url_for("analytics_bardata"),
             "importDataset": url_for("import_dataset"),
             "deleteDataset": url_for("delete_dataset"),
+            "versions": url_for("api_versions"),
+            "comparisons": url_for("api_comparisons"),
+            "comparisonsLatest": url_for("api_comparisons_latest"),
         },
     }
     return state

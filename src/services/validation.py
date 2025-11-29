@@ -15,6 +15,18 @@ def require_exact_three(versions: Sequence[str]) -> List[str]:
     return cleaned
 
 
+def require_one_to_three(versions: Sequence[str]) -> List[str]:
+    """Validate selection contains between one and three distinct versions."""
+    cleaned = [v for v in versions if v]
+    if len(cleaned) != len(set(cleaned)):
+        raise ValidationError("Versions must be distinct; duplicates detected.")
+    if not cleaned:
+        raise ValidationError("At least one version is required for comparison.")
+    if len(cleaned) > 3:
+        raise ValidationError("No more than three versions are allowed for comparison.")
+    return cleaned
+
+
 def require_present(requested: Iterable[str], available: Iterable[str]) -> None:
     """Validate requested versions are present in the available set."""
     available_set = set(available)
