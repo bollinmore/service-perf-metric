@@ -19,7 +19,10 @@ def result_root() -> Path:
 
 def result_root_for_data_folder(data_folder: str | Path) -> Path:
     """Resolve the result root for a given data folder name or path."""
-    folder_name = Path(data_folder).name
+    data_path = Path(data_folder)
+    folder_name = data_path.name
+    if data_path.is_absolute():
+        return data_path
     return result_root() / folder_name
 
 

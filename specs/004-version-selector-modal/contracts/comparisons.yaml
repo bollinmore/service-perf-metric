@@ -1,0 +1,63 @@
+openapi: 3.0.0
+info:
+  title: Version Comparison
+  version: "0.1.0"
+paths:
+  /comparisons:
+    post:
+      summary: Create or update a comparison for selected versions (up to three)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data_folder:
+                  type: string
+                  description: Absolute path to the data folder containing dataset directories.
+                versions:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items:
+                    type: string
+                    description: "<dataset>/<version>"
+      responses:
+        "201":
+          description: Comparison run initialized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                  selected_versions:
+                    type: array
+                    items:
+                      type: string
+                  outputs:
+                    type: object
+                  status:
+                    type: string
+        "400":
+          description: Invalid payload or unavailable versions
+        "404":
+          description: Data folder or versions not found
+  /comparisons/latest:
+    get:
+      summary: Retrieve the most recent comparison metadata for the data folder
+      parameters:
+        - in: query
+          name: data_folder
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Latest comparison metadata
+        "400":
+          description: Missing data_folder
+        "404":
+          description: No comparison found

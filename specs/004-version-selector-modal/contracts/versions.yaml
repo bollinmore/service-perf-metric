@@ -1,0 +1,48 @@
+openapi: 3.0.0
+info:
+  title: Version Listing
+  version: "0.1.0"
+paths:
+  /versions:
+    get:
+      summary: List dataset/version options from the configured data folder
+      parameters:
+        - in: query
+          name: data_folder
+          required: true
+          schema:
+            type: string
+            description: Absolute path to the data folder containing dataset directories.
+      responses:
+        "200":
+          description: Version options discovered across datasets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data_folder:
+                    type: string
+                  versions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: "<dataset>/<version>"
+                        dataset:
+                          type: string
+                        version:
+                          type: string
+                        status:
+                          type: string
+                          enum: [available, missing_artifacts]
+                        summary_path:
+                          type: string
+                        selectable:
+                          type: boolean
+        "400":
+          description: Missing or invalid data_folder
+        "404":
+          description: Data folder not found

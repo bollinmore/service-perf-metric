@@ -374,6 +374,18 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
     const downloadEndpoint = endpoints.download || "/download";
     const importEndpoint = endpoints.importDataset || "/api/datasets/import";
     const deleteEndpoint = endpoints.deleteDataset || "/api/datasets/delete";
+    const versionsEndpoint = endpoints.versions || "/versions";
+    const comparisonsEndpoint = endpoints.comparisons || "/comparisons";
+    const dataFolder = state.dataFolder || initial.dataFolder || "";
+
+    const [showVersionModal, setShowVersionModal] = useState(false);
+    const [versionOptions, setVersionOptions] = useState([]);
+    const [versionFetchError, setVersionFetchError] = useState("");
+    const [applyError, setApplyError] = useState("");
+    const [selectionMessage, setSelectionMessage] = useState("");
+    const [workingSelection, setWorkingSelection] = useState([]);
+    const [activeSelection, setActiveSelection] = useState([]);
+    const [applyLoading, setApplyLoading] = useState(false);
 
     const datasetOptions = useMemo(() => {
       const opts = [...(state.datasetOptions || [])];
@@ -484,6 +496,138 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       }
       loadState(overrides);
     }, [initial.versions, initialDatasetState, initialViewState, loadState]);
+
+    const fetchVersionOptions = useCallback(async () => {
+      if (!dataFolder) {
+        setVersionFetchError("Data folder is not configured.");
+        setVersionOptions([]);
+        return;
+      }
+      setVersionFetchError("");
+      try {
+        const resp = await fetch(
+          `${versionsEndpoint}?data_folder=${encodeURIComponent(dataFolder)}`
+        );
+        if (!resp.ok) {
+          const payload = await resp.json().catch(() => ({}));
+          throw new Error(payload.error || `Unable to load versions (status ${resp.status}).`);
+        }
+        const payload = await resp.json();
+        const options = (payload.versions || []).map((item) => ({
+          id: item.version_id || item.id || "",
+          dataset: item.dataset || "",
+          version: item.version || item.version_id || "",
+          status: item.status || "available",
+          selectable: item.selectable !== false && item.status === "available",
+        }));
+        options.sort((a, b) => {
+          if (a.dataset === b.dataset) {
+            return a.version.localeCompare(b.version, undefined, { sensitivity: "base" });
+          }
+          return a.dataset.localeCompare(b.dataset, undefined, { sensitivity: "base" });
+        });
+        setVersionOptions(options);
+      } catch (err) {
+        setVersionFetchError(err.message || "Unable to load versions.");
+        setVersionOptions([]);
+      }
+    }, [dataFolder, versionsEndpoint]);
+
+    useEffect(() => {
+      if (showVersionModal) {
+        setApplyError("");
+        setSelectionMessage("");
+        setWorkingSelection(activeSelection);
+        fetchVersionOptions();
+      }
+    }, [showVersionModal, activeSelection, fetchVersionOptions]);
+
+    const toggleWorkingSelection = (id, selectable) => {
+      if (workingSelection.includes(id)) {
+        setWorkingSelection((prev) => prev.filter((v) => v !== id));
+        setSelectionMessage("");
+        return;
+      }
+      if (!selectable) return;
+      if (workingSelection.length >= 3) {
+        setSelectionMessage("You can select up to three versions.");
+        return;
+      }
+      setSelectionMessage("");
+      setWorkingSelection((prev) => [...prev, id]);
+    };
+
+    const fetchLatestComparison = useCallback(async () => {
+      if (!dataFolder) return null;
+      try {
+        const resp = await fetch(
+          `${endpoints.comparisonsLatest || "/comparisons/latest"}?data_folder=${encodeURIComponent(
+            dataFolder
+          )}`
+        );
+        if (!resp.ok) return null;
+        return await resp.json();
+      } catch {
+        return null;
+      }
+    }, [dataFolder, endpoints.comparisonsLatest]);
+
+    const handleConfirmSelection = useCallback(async () => {
+      if (!workingSelection.length) {
+        setSelectionMessage("Select at least one version.");
+        return;
+      }
+      setApplyLoading(true);
+      setApplyError("");
+      try {
+        if (dataFolder && comparisonsEndpoint) {
+          const resp = await fetch(comparisonsEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data_folder: dataFolder, versions: workingSelection }),
+          });
+          if (!resp.ok) {
+            const payload = await resp.json().catch(() => ({}));
+            throw new Error(payload.error || `Comparison request failed (${resp.status}).`);
+          }
+          await resp.json();
+        }
+        // Reload dashboard data so charts/compare views reflect the freshly generated comparison outputs.
+        await loadState({ view, dataset });
+        setActiveSelection(workingSelection);
+        setState((prev) => ({
+          ...prev,
+          versions: workingSelection,
+          selectedVersions: workingSelection,
+          compare: {
+            ...(prev.compare || {}),
+            defaults: {
+              ...(prev.compare?.defaults || {}),
+              versionA: workingSelection[0] || "",
+              versionB: workingSelection[1] || workingSelection[0] || "",
+            },
+          },
+        }));
+        setCompare((prev) => ({
+          ...prev,
+          versionA: workingSelection[0] || "",
+          versionB: workingSelection[1] || workingSelection[0] || "",
+        }));
+        // attempt to hydrate latest comparison data for immediate UI update
+        const latest = await fetchLatestComparison();
+        if (latest) {
+          setState((prev) => ({
+            ...prev,
+            latestComparison: latest,
+          }));
+        }
+        setShowVersionModal(false);
+      } catch (err) {
+        setApplyError(err.message || "Unable to apply selections.");
+      } finally {
+        setApplyLoading(false);
+      }
+    }, [workingSelection, dataFolder, comparisonsEndpoint, fetchLatestComparison, loadState, view, dataset]);
 
     const handleDatasetImport = useCallback(
       async (event) => {
@@ -790,6 +934,39 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       });
     }, [reportGroups]);
 
+    const optionMap = useMemo(() => {
+      const m = new Map();
+      versionOptions.forEach((opt) => m.set(opt.id, opt));
+      return m;
+    }, [versionOptions]);
+
+    const unavailableSelections = useMemo(
+      () => workingSelection.filter((id) => !optionMap.get(id) || optionMap.get(id).selectable === false),
+      [workingSelection, optionMap]
+    );
+
+    const displayOptions = useMemo(() => {
+      const extras = unavailableSelections
+        .filter((id) => !optionMap.has(id))
+        .map((id) => ({
+          id,
+          dataset: "Unknown",
+          version: id,
+          status: "missing",
+          selectable: false,
+          unavailable: true,
+        }));
+      return [...versionOptions, ...extras];
+    }, [versionOptions, unavailableSelections, optionMap]);
+
+    const hasUnavailable = unavailableSelections.length > 0;
+    const confirmDisabled =
+      applyLoading ||
+      !workingSelection.length ||
+      !!versionFetchError ||
+      (!displayOptions.length && !workingSelection.length) ||
+      hasUnavailable;
+
     const analyticsView = html`<${AnalyticsPanel}
       state=${state}
       version=${version}
@@ -798,6 +975,116 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
         updateUrl({ version: next || null });
       }}
     />`;
+
+    const versionModal = showVersionModal
+      ? html`<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true" aria-label="Select versions">
+          <div className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-2xl" tabIndex="-1">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Select versions</h3>
+                <p className="text-xs text-gray-500">
+                  Choose up to three versions. List refreshes on open.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-md border border-gray-200 bg-white px-2 py-1 text-sm text-gray-600 shadow-sm hover:border-indigo-400 hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                onClick=${() => setShowVersionModal(false)}
+                aria-label="Close version selector"
+              >
+                Close
+              </button>
+            </div>
+            <div className="max-h-[60vh] space-y-3 overflow-y-auto px-4 py-3">
+              ${versionFetchError
+                ? html`<div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    ${versionFetchError}
+                  </div>`
+                : null}
+              ${!versionFetchError && !versionOptions.length
+                ? html`<div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                    No versions available. Ensure datasets and summaries exist.
+                  </div>`
+                : null}
+              ${displayOptions.map((opt) => {
+                const selected = workingSelection.includes(opt.id);
+                const selectable = opt.selectable !== false;
+                const unavailable = !selectable;
+                const canToggle = selectable || selected;
+                return html`<button
+                  key=${opt.id}
+                  type="button"
+                  className=${classNames(
+                    "flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left shadow-sm transition",
+                    selected
+                      ? "border-indigo-400 bg-indigo-50"
+                      : "border-gray-200 bg-white hover:border-indigo-300",
+                    selectable ? "" : "opacity-60",
+                    canToggle ? "" : "cursor-not-allowed"
+                  )}
+                  onClick=${() => canToggle && toggleWorkingSelection(opt.id, selectable)}
+                  aria-pressed=${selected}
+                  disabled=${!canToggle}
+                  aria-label=${`${selected ? "Deselect" : "Select"} version ${opt.version} from dataset ${opt.dataset}`}
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">${opt.version}</p>
+                    <p className="text-xs text-gray-500">Dataset: ${opt.dataset}</p>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    ${opt.status === "available" ? "Available" : "Unavailable"}
+                  </div>
+                  <div
+                    className=${classNames(
+                      "rounded-full px-2 py-1 text-xs font-medium",
+                      selected
+                        ? "bg-indigo-500 text-white"
+                        : unavailable
+                        ? "bg-gray-100 text-gray-500"
+                        : "bg-gray-200 text-gray-700"
+                    )}
+                  >
+                    ${selected ? "Selected" : unavailable ? "Unavailable" : "Select"}
+                  </div>
+                </button>`;
+              })}
+            </div>
+            <div className="flex items-center justify-between gap-3 border-t px-4 py-3">
+              <div className="text-sm text-gray-600">
+                ${applyError
+                  ? html`<span className="text-rose-600">${applyError}</span>`
+                  : selectionMessage
+                  ? html`<span>${selectionMessage}</span>`
+                  : hasUnavailable
+                  ? html`<span className="text-amber-700">
+                      Remove unavailable selections to proceed.
+                    </span>`
+                  : html`<span>
+                      Selected: ${workingSelection.length ? workingSelection.join(", ") : "None"}
+                    </span>`}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 shadow-sm hover:border-indigo-400 hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  onClick=${() => setShowVersionModal(false)}
+                  disabled=${applyLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:cursor-not-allowed disabled:bg-indigo-300"
+                  onClick=${handleConfirmSelection}
+                  disabled=${confirmDisabled}
+                >
+                  ${applyLoading ? "Applying..." : "Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>`
+      : null;
 
   const reportsPanel = html`<div className="flex h-[calc(100vh-6rem)] gap-6 overflow-visible">
       <aside className="flex w-64 flex-shrink-0 flex-col overflow-visible rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -1102,6 +1389,9 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       </section>
     </div>`;
 
+    const compareOptions = activeSelection.length ? activeSelection : state.versions || [];
+    const latestComparison = state.latestComparison || {};
+
     const comparePanel = html`<div className="space-y-6">
       <section className="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white px-5 py-4 shadow-sm md:flex-row md:items-center md:justify-between">
         <div>
@@ -1136,7 +1426,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
                     });
                   }}
                 >
-                  ${(state.versions || []).map(
+                  ${compareOptions.map(
                     (version) =>
                       html`<option key=${`cmp-opt-${version}`} value=${version}>
                         ${version}
@@ -1259,6 +1549,7 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
     </div>`;
 
   return html`<div className="flex h-screen bg-gray-100 overflow-hidden">
+      ${versionModal}
       <aside className="flex h-full w-20 flex-shrink-0 flex-col items-center gap-4 bg-gray-900 py-6 text-gray-200 shadow-lg">
         ${VIEWS.map((item) => {
           const active = item.id === view;
@@ -1284,37 +1575,57 @@ const AnalyticsPanel = ({ state, version, onVersionChange }) => {
       <div className="flex h-full flex-1 flex-col overflow-hidden">
         <header className="sticky top-0 z-30 flex-shrink-0 border-b border-gray-200 bg-white bg-opacity-95 backdrop-blur">
           <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-6 py-4">
-            <div>
-              <h1 className="text-xl font-semibold text-gray-900">
-                Service Performance Metric
-              </h1>
-              <p className="text-sm text-gray-500">
-                View: ${VIEWS.find((item) => item.id === view)?.label || "Analytics"}
-              </p>
-            </div>
+          <button
+            type="button"
+            className="text-left"
+            onClick=${() => {
+              // Always return to the app home (root) to reset view/query params.
+              window.location.assign("/");
+            }}
+            aria-label="Go to home"
+          >
+            <h1 className="text-xl font-semibold text-gray-900">
+              Service Performance Metric
+            </h1>
+            <p className="text-sm text-gray-500">
+              View: ${VIEWS.find((item) => item.id === view)?.label || "Analytics"}
+            </p>
+          </button>
             <div className="flex items-center gap-3">
-              <label className="text-sm font-medium text-gray-600" for="datasetSelect">
-                Dataset
-              </label>
-              <select
-                id="datasetSelect"
-                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                value=${dataset}
-                onChange=${(event) => {
-                  const value = event.target.value;
-                  setDataset(value);
-                  setReport("");
-                  updateUrl({ dataset: value, report: null });
-                  loadState({ dataset: value });
-                }}
+              ${activeSelection.length
+                ? html`<div className="flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
+                    <span>Selected:</span>
+                    <span className="truncate">${activeSelection.join(", ")}</span>
+                  </div>`
+                : html`<span className="text-xs text-gray-500">No versions selected</span>`}
+              <button
+                type="button"
+                className="rounded-md border border-gray-200 bg-white p-2 text-gray-700 shadow-sm transition hover:border-indigo-400 hover:text-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                aria-label="Open version settings"
+                title="Select versions"
+                onClick=${() => setShowVersionModal(true)}
               >
-                ${datasetOptions.map(
-                  (option) =>
-                    html`<option key=${`dataset-${option || "default"}`} value=${option}>
-                      ${option || "Default"}
-                    </option>`
-                )}
-              </select>
+                <svg
+                  className="h-5 w-5"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M10 4.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z" />
+                  <path d="M10 2.5v1" />
+                  <path d="M10 9v1" />
+                  <path d="m14.33 5.67-.7.7" />
+                  <path d="m6.37 13.63-.7.7" />
+                  <path d="m15.5 10-1 .02" />
+                  <path d="m5.5 10 1 .02" />
+                  <path d="m13.63 13.63-.7-.7" />
+                  <path d="m6.37 6.37-.7-.7" />
+                </svg>
+              </button>
               ${loading
                 ? html`<span className="text-xs text-gray-500">Loading...</span>`
                 : null}
