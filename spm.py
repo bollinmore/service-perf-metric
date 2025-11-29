@@ -55,16 +55,7 @@ if not FILE_LOGGER.handlers:
     FILE_LOGGER.addHandler(fh)
     FILE_LOGGER.setLevel(logging.INFO)
     FILE_LOGGER.propagate = False
-FILE_LOGGER = logging.getLogger("spm.runfile")
-if not FILE_LOGGER.handlers:
-    fh = logging.FileHandler(RUN_LOG, encoding="utf-8")
-    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    FILE_LOGGER.addHandler(fh)
-    FILE_LOGGER.setLevel(logging.INFO)
-    FILE_LOGGER.propagate = False
-
-
-def _resolve_path(path_str: str, default: Path) -> Path:
+def _resolve_path(path_str: str | None, default: Path) -> Path:
     """Resolve a user-supplied path against the project root when relative."""
     raw = Path(path_str) if path_str else default
     return raw if raw.is_absolute() else (BASE_DIR / raw)
@@ -374,12 +365,12 @@ def _build_parser() -> argparse.ArgumentParser:
     generate_parser.set_defaults(func=cmd_generate)
 
     serve_parser = subparsers.add_parser(
-        "serve", help="Build reports (optional) and start the web app (requires --data-folder)"
+        "serve", help="Build reports (optional) and start the web app (defaults to ./data)"
     )
     serve_parser.add_argument(
         "--data-folder",
-        required=True,
-        help="Data folder containing version folders (required)",
+        default=None,
+        help="Data folder containing version folders (default: $SPM_DATA_FOLDER or data)",
     )
     serve_parser.add_argument(
         "--versions",
@@ -490,7 +481,8 @@ def cmd_clean(args: argparse.Namespace) -> None:
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
-    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    default_data = config.resolve_data_folder(None)
+    data_root = validate_base_path(_resolve_path(args.data_folder, default_data))
     versions = parse_versions_arg(args.versions)
     plan = plan_comparison(data_root, versions or None, result_root_for_data(data_root))
     if plan.conflicts and not getattr(args, "allow_conflicts", False):
@@ -502,7 +494,8 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    default_data = config.resolve_data_folder(None)
+    data_root = validate_base_path(_resolve_path(args.data_folder, default_data))
     discovered = discover_versions(data_root)
     all_versions = sorted(v.name for v in discovered)
     if not all_versions:
@@ -546,7 +539,8 @@ def cmd_merge(args: argparse.Namespace) -> None:
 
 
 def cmd_versions(args: argparse.Namespace) -> None:
-    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    default_data = config.resolve_data_folder(None)
+    data_root = validate_base_path(_resolve_path(args.data_folder, default_data))
     versions = discover_versions(data_root)
     if not versions:
         print(f"[versions] No versions found under {data_root}")
@@ -557,7 +551,8 @@ def cmd_versions(args: argparse.Namespace) -> None:
 
 
 def cmd_compare(args: argparse.Namespace) -> None:
-    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    default_data = config.resolve_data_folder(None)
+    data_root = validate_base_path(_resolve_path(args.data_folder, default_data))
     versions = parse_versions_arg(args.versions)
     plan = plan_comparison(data_root, versions or None, result_root_for_data(data_root))
     if plan.conflicts and not getattr(args, "allow_conflicts", False):
@@ -569,7 +564,8 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 
 def cmd_upload(args: argparse.Namespace) -> None:
-    data_root = validate_base_path(_resolve_path(args.data_folder, DEFAULT_DATA_DIR))
+    default_data = config.resolve_data_folder(None)
+    data_root = validate_base_path(_resolve_path(args.data_folder, default_data))
     zip_path = _resolve_path(args.zip, BASE_DIR)
     try:
         version_name = validate_upload(zip_path)

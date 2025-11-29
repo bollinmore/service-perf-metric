@@ -15,6 +15,7 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - Start the browser UI (builds reports unless `--no-build` is supplied):
   - `python spm.py serve --data-folder data`
   - `python spm.py serve --data-folder data2`
+  - `--data-folder` is optional for `serve`; defaults to `data` (or `$SPM_DATA_FOLDER`) so Docker runs without extra flags.
   - Optional: `--versions ...`, `--refresh`, `--allow-conflicts`
   - Open tables at `http://localhost:6231/`
   - Analytics dashboard at `http://localhost:6231/analytics`
