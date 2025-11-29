@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request
 
 from src.lib.path_utils import ValidationError
 from src.services.comparison import get_latest_comparison, run_comparison
-from src.services.validation import require_one_to_three
+from src.services.validation import require_exact_three
 
 bp = Blueprint("comparisons", __name__, url_prefix="/comparisons")
 
@@ -20,11 +20,7 @@ def create_comparison():
     if not data_folder:
         return jsonify({"error": "data_folder is required"}), 400
     try:
-        require_one_to_three(versions)
-    except ValidationError as exc:
-        return jsonify({"error": str(exc)}), 400
-
-    try:
+        require_exact_three(versions)
         result = run_comparison(Path(data_folder), versions)
     except ValidationError as exc:
         return jsonify({"error": str(exc)}), 400

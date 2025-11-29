@@ -11,11 +11,11 @@ from src.services.version_discovery import _collect_logs
 @dataclass
 class VersionStatus:
     version_id: str
-    dataset: str
-    version: str
-    path: Path
-    summary_path: Path
-    status: str  # available | missing_artifacts
+    dataset: str = ""
+    version: str = ""
+    path: Path | None = None
+    summary_path: Path | None = None
+    status: str = ""  # available | missing_artifacts
     message: str = ""
 
 
