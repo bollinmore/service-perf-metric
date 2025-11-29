@@ -496,17 +496,18 @@ def cmd_generate(args: argparse.Namespace) -> None:
 def cmd_serve(args: argparse.Namespace) -> None:
     default_data = config.resolve_data_folder(None)
     data_root = validate_base_path(_resolve_path(args.data_folder, default_data))
-    discovered = discover_versions(data_root)
+    discovered = discover_versions(data_root, strict_missing=False)
     all_versions = sorted(v.name for v in discovered)
-    if not all_versions:
-        raise ValidationError(f"No versions found under {data_root}")
 
     result_root = result_root_for_data(data_root)
+    result_root.mkdir(parents=True, exist_ok=True)
     compare_selection: List[str] = []
     if len(all_versions) >= 2:
         compare_selection = all_versions[-3:] if len(all_versions) > 3 else all_versions
+    elif not all_versions:
+        print(f"[serve] No versions found under {data_root}; waiting for uploads via web UI.")
 
-    if not args.no_build:
+    if not args.no_build and all_versions:
         def _summaries_exist(root: Path, versions: List[str]) -> bool:
             return all((root / ver / "summary.csv").exists() for ver in versions)
 
