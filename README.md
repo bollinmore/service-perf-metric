@@ -50,6 +50,21 @@ Browse performance CSV outputs in a browser and generate summary reports.
 - Use a host data folder instead of the named volume: replace the data mount with `-v "$PWD/data:/app/data"` (or `SPM_DATA_VOLUME=$PWD/data docker compose up --build`).
 - Compose: `docker compose up --build` (defaults to `6231:6231` and `spm-data:/app/data`; override data mount via `SPM_DATA_VOLUME`).
 - Relevant env vars: `SPM_DEFAULT_DATASET`, `SPM_RESULT_BASE`, `SPM_RESULT_ROOT`, `SPM_DATA_FOLDER` for custom data roots.
+- Exoport and import image
+  ```bash
+  docker save -o spm-app.tar spm-app:latest  # Export
+  docker load -i spm-app.tar                 # Import
+  ```
+- Export old data
+  ```bash
+  docker run --rm --volumes-from spm-data -v $(pwd):/backup alpine tar cvf /backup/spm-data-backup.tar /var/lib/docker/volumes/spm-data/_data
+  
+  docker run --rm -v new-volume:/data -v $(pwd):/backup alpine sh -c "cd /data && tar xvf /backup/spm-data-backup.tar --strip 1"
+  ```
+- Launch service with data
+  ```bash
+  docker run -d --rm --name spm -v spm-data:/app/data -p 6231:6231 spm-app
+  ```
 
 ## Project Layout
 
