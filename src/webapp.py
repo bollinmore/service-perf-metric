@@ -73,14 +73,7 @@ app = Flask(
     static_folder=str(PROJECT_ROOT / "static"),
 )
 
-EXCLUDED_SERVICES = {
-    "EIP2",
-    "EIP 2",
-    "Microsoft 365",
-    "MICROSOFT 365",
-    "OUTLOOK",
-    "Outlook",
-}
+EXCLUDED_SERVICES = set()
 
 
 def _mode_service():
