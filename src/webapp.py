@@ -495,6 +495,188 @@ def _clean_component(component: str) -> str:
     return cleaned
 
 
+def _unique_dest_path(dest_dir: Path, filename: str) -> Path:
+    dest = dest_dir / filename
+    if not dest.exists():
+        return dest
+    stem = dest.stem
+    suffix = dest.suffix
+    idx = 1
+    while True:
+        candidate = dest_dir / f"{stem}_{idx}{suffix}"
+        if not candidate.exists():
+            return candidate
+        idx += 1
+
+
+def _extract_performance_logs(dataset_root: Path) -> List[Path]:
+    """Copy *.log files from any Performance directories into PerformanceLog folders."""
+    extracted_dirs: List[Path] = []
+    if not dataset_root.exists():
+        return extracted_dirs
+
+    performance_dirs = [
+        path
+        for path in dataset_root.rglob("*")
+        if path.is_dir() and path.name.lower() == "performance"
+    ]
+    if not performance_dirs:
+        return extracted_dirs
+
+    for perf_dir in performance_dirs:
+        try:
+            rel = perf_dir.relative_to(dataset_root)
+        except ValueError:
+            continue
+        parts = list(rel.parts)
+        if not parts:
+            continue
+        first = parts[0].lower()
+        if first in {"log", "logs"}:
+            version_root = dataset_root
+        else:
+            version_root = dataset_root / parts[0]
+        if not version_root.exists():
+            continue
+        dest_dir = version_root / "PerformanceLog"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        copied_any = False
+        for log_path in sorted(perf_dir.rglob("*.log")):
+            if not log_path.is_file():
+                continue
+            dest_path = _unique_dest_path(dest_dir, log_path.name)
+            shutil.copy2(log_path, dest_path)
+            copied_any = True
+        if copied_any:
+            extracted_dirs.append(dest_dir)
+    return extracted_dirs
+
+
+def _prune_to_performancelog(dataset_root: Path) -> None:
+    """Keep only PerformanceLog directories under each version folder."""
+    if not dataset_root.exists():
+        return
+
+    root_perf = dataset_root / "PerformanceLog"
+    if root_perf.exists():
+        for entry in dataset_root.iterdir():
+            if entry == root_perf:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+        return
+
+    version_dirs = _collect_version_dirs(dataset_root)
+    if not version_dirs:
+        return
+
+    allowed_versions = {v.resolve() for v in version_dirs}
+    dataset_root_resolved = dataset_root.resolve()
+
+    if dataset_root_resolved in allowed_versions:
+        # Single version at root; keep only PerformanceLog.
+        for entry in dataset_root.iterdir():
+            if entry.name == "PerformanceLog":
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+        return
+
+    # Remove non-version entries at dataset root.
+    for entry in dataset_root.iterdir():
+        try:
+            entry_resolved = entry.resolve()
+        except FileNotFoundError:
+            continue
+        if entry_resolved in allowed_versions:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+
+    # Prune version directories to keep only PerformanceLog.
+    for version_dir in allowed_versions:
+        if not version_dir.exists():
+            continue
+        for child in version_dir.iterdir():
+            if child.name == "PerformanceLog":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+
+
+def _collapse_single_version_to_root(dataset_root: Path) -> None:
+    """If there's only one version folder, move its PerformanceLog to dataset root."""
+    if not dataset_root.exists():
+        return
+
+    version_dirs = _collect_version_dirs(dataset_root)
+    if len(version_dirs) != 1:
+        return
+
+    version_dir = version_dirs[0]
+    if version_dir.resolve() == dataset_root.resolve():
+        return
+
+    source = version_dir / "PerformanceLog"
+    if not source.exists():
+        return
+
+    dest = dataset_root / "PerformanceLog"
+    dest.mkdir(parents=True, exist_ok=True)
+    for log_path in sorted(source.glob("*.log")):
+        if not log_path.is_file():
+            continue
+        dest_path = _unique_dest_path(dest, log_path.name)
+        shutil.move(str(log_path), dest_path)
+
+    shutil.rmtree(version_dir, ignore_errors=True)
+
+
+def _collapse_version_parts_to_root(dataset_root: Path) -> None:
+    """Merge part folders into dataset_root/PerformanceLog when all share the root version token."""
+    if not dataset_root.exists():
+        return
+
+    version_dirs = _collect_version_dirs(dataset_root)
+    if not version_dirs:
+        return
+
+    version_token_match = re.fullmatch(r"\d+(?:\.\d+)+", dataset_root.name)
+    if not version_token_match:
+        return
+
+    root_token = dataset_root.name
+    candidates = [v for v in version_dirs if v.resolve() != dataset_root.resolve()]
+    if not candidates:
+        return
+
+    for vdir in candidates:
+        tokens = re.findall(r"\d+(?:\.\d+)+", vdir.name)
+        if root_token not in tokens:
+            return
+
+    root_perf = dataset_root / "PerformanceLog"
+    root_perf.mkdir(parents=True, exist_ok=True)
+    for vdir in candidates:
+        source = vdir / "PerformanceLog"
+        if not source.exists():
+            continue
+        for log_path in sorted(source.glob("*.log")):
+            if not log_path.is_file():
+                continue
+            dest_path = _unique_dest_path(root_perf, log_path.name)
+            shutil.move(str(log_path), dest_path)
+        shutil.rmtree(vdir, ignore_errors=True)
+
+
 def _validate_import_candidate(dataset_root: Path) -> None:
     if not dataset_root.exists() or not dataset_root.is_dir():
         raise ValueError("Dataset folder is missing inside the archive.")
@@ -514,7 +696,7 @@ def _validate_import_candidate(dataset_root: Path) -> None:
 
     if len(version_dirs) < 1:
         raise ValueError(
-            "Dataset must contain at least one version (root or subfolder) with a PerformanceLog directory."
+            "Dataset must contain at least one version (root or subfolder) with a PerformanceLog directory (or a log/Performance folder)."
         )
     # Verify each version has at least one .log
     missing_logs = [
@@ -712,6 +894,10 @@ def import_dataset() -> Tuple[Response, int]:
             abort(500, "Failed to process uploaded dataset.")
 
         extracted_root = _normalize_dataset_root(extracted_root)
+        _extract_performance_logs(extracted_root)
+        _collapse_version_parts_to_root(extracted_root)
+        _collapse_single_version_to_root(extracted_root)
+        _prune_to_performancelog(extracted_root)
 
         try:
             _validate_import_candidate(extracted_root)
