@@ -97,8 +97,8 @@ def _collect_log_dirs(data_root: Path, allowed_versions: List[str] | None = None
 
 def _determine_pattern(log_dir: Path) -> str:
     """Pick a glob pattern for log files, preferring loading/inquire2 primary logs."""
-    if list(log_dir.glob("*loading.log")):
-        return "*loading.log"
+    if list(log_dir.glob("*loading*.log")):
+        return "*loading*.log"
     if list(log_dir.glob("*inquire2.log")):
         return "*inquire2.log"
     return "*.log"
